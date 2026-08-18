@@ -17,6 +17,7 @@
 - [3. 如何根据用户生成要求影响输出结果](#3-如何根据用户生成要求影响输出结果)
 - [4. 如何实现章节级 5W1H 总结](#4-如何实现章节级-5w1h-总结)
 - [5. 主要工程取舍与亮点](#5-主要工程取舍与亮点)
+- [6. 架构与模块](#6-架构与模块)
 - [部署与运行](#部署与运行)
 - [API 协议](#api-协议)
 - [2026 年 YouTube 字幕风控实测记录](#2026-年-youtube-字幕风控实测记录)
@@ -164,6 +165,7 @@ generateJson(env, system, user) {
 - **双锚点定位**：`findSection(article, title, index)` 同时校验标题+序号，防同名章节
 - **会话存储双层**：`store.ts` 内存 Map 优先、KV 兜底——KV 是最终一致性存储（传播延迟可达数十秒），而 5W1H 是「生成完立刻点」的场景，内存层保证同实例零延迟读取
 - **解析重试**：Gemini responseSchema 偶发返回不合法 JSON 时，自动重试 1 次（不重试 429/鉴权类错误）
+- **写序保证**：generate 在发 `done` 事件**之前**先 `saveSession`——`done` 到达浏览器的那一刻，5W1H 请求已保证可读，杜绝「文章刚生成完就点 5W1H 却提示会话不存在」的竞态
 
 ### 客户端缓存
 
@@ -213,7 +215,9 @@ KV 最终一致性 + 5W1H 强实时性 → 内存 Map 优先读 + KV 兜底。�
 ```bash
 npm install
 npm run dev          # wrangler dev → http://localhost:8787
-npm run typecheck    # 0 错误
+npm run typecheck    # tsc --noEmit，0 错误
+npm run lint         # ESLint（flat config），0 错误
+npm test             # vitest，9 个文件 55 个用例
 ```
 
 `wrangler dev` 启动后访问 `http://localhost:8787`，未配置 `GEMINI_API_KEY` 时进入演示模式（假流 + 内置 5W1H 示例）。
@@ -302,29 +306,61 @@ npm run deploy
 
 ---
 
-## 仓库结构
+## 6. 架构与模块
+
+### 轻量六边形分层
 
 ```
-transcript-talk/
+xvc-assignment/
+├── public/index.html        表现层（零依赖单文件；对后端的全部认知 = 2 个 POST 端点 + 5 类 SSE 事件）
 ├── src/
-│   ├── index.ts                # 入口：路由 + thin edge
-│   ├── core/                   # 纯逻辑，可直接单测
-│   │   ├── types.ts            # 全部领域类型 + AppEnv + SseEvent 契约
-│   │   ├── transcript.ts       # 视频 ID 提取、轨道选择、json3 解析、watch HTML 双格式解析、截断
-│   │   ├── markdown.ts         # 章节切分（generate 与 summarize 共享单一事实来源）
-│   │   └── prompts.ts          # 三层提示词工厂 + 注入防护
-│   ├── adapters/               # 外部依赖适配器
-│   │   ├── youtube.ts          # 字幕抓取降级链
-│   │   ├── proxy.ts            # webshare TCP Socket 隧道
-│   │   ├── gemini.ts           # Gemini 流式 + 结构化 JSON
-│   │   └── store.ts            # 会话存储（内存 + KV 双层）
-│   ├── routes/                 # 用例层
-│   │   ├── generate.ts         # 生成流
-│   │   ├── summarize.ts        # 5W1H
-│   │   └── http.ts             # JSON/SSE 响应 + CORS
-│   └── demo-transcript.ts      # 演示字幕 + 演示文章 + 5W1H 示例
-├── public/index.html           # 前端单文件（零依赖、零构建）
-├── wrangler.toml               # assets + 兼容性 + 可选 vars/kv
-├── package.json
-└── tsconfig.json               # strict + noUnusedLocals + noUncheckedIndexedAccess
+│   ├── index.ts             入口层 · thin edge（路由分发 + 全局异常兜底，无业务逻辑）
+│   ├── routes/              用例层（每文件一个业务用例，只做编排）
+│   │   ├── generate.ts        生成文章主流程
+│   │   ├── summarize.ts       5W1H 总结
+│   │   └── http.ts            JSON/SSE 响应工厂 + CORS
+│   ├── adapters/            基础设施层（每个外部依赖一个适配器）
+│   │   ├── youtube.ts         YouTube 字幕（四级降级链）
+│   │   ├── proxy.ts           webshare TCP Socket 隧道（CONNECT + startTls + 手写 HTTP/1.1）
+│   │   ├── gemini.ts          Gemini 流式 SSE + 结构化 JSON
+│   │   └── store.ts           会话存储（内存 Map 优先 + KV 兜底）
+│   ├── core/                领域层（纯逻辑、零 I/O，可直接单测）
+│   │   ├── types.ts           全部类型契约（AppEnv / SseEvent / Transcript…）
+│   │   ├── transcript.ts      videoId 提取、轨道选择、json3 解析、截断
+│   │   ├── markdown.ts        章节切分（generate/summarize 共用的单一事实来源）
+│   │   ├── prompts.ts         三层提示词工厂 + 注入防护
+│   │   └── logger.ts          结构化 JSON 日志
+│   └── demo-transcript.ts   演示数据（兜底字幕 + 预生成文章 + 5W1H 示例）
+├── test/                    vitest 单测（9 文件 55 用例：core 纯逻辑 + adapters mock）
+├── wrangler.toml            assets + 兼容性 + 可选 vars/kv
+├── eslint.config.mjs        ESLint flat config（JS + TS 推荐规则）
+├── vitest.config.ts
+├── tsconfig.json            strict + noUnusedLocals + noUncheckedIndexedAccess
+└── package.json             dev / deploy / typecheck / lint / test
 ```
+
+**依赖方向严格单向**：`index → routes → adapters → core`，`core` 不依赖任何人。换掉 YouTube 抓取、Gemini、存储方案只动对应 adapter，业务编排零改动；`core` 因零 I/O 可脱离 Cloudflare 运行时直接单测。
+
+### 请求生命周期（generate）
+
+- **泵模式**：路由先把 `Response(readable)` 返回给运行时，生成过程在后台异步泵入 TransformStream——浏览器首字节延迟 ≈ 字幕抓取耗时，而非等全文生成完
+- **断连三向传播**：浏览器「停止」按钮 → `AbortController.abort()` → ① 前端 fetch reader 释放 ② Worker 侧流写入中断 ③ 上游 Gemini fetch `signal` 触发——不浪费免费配额
+
+### 可观测性：三级追踪
+
+| 标识 | 生成处 | 作用域 |
+|---|---|---|
+| `requestId`（cf-ray） | Cloudflare 边缘 | 单次 HTTP 请求定位（本地 dev 自动生成兜底） |
+| `sessionId` | generate 入口（UUID） | 业务主键：字幕降级链 → 流式生成 → 会话保存 → 5W1H 全链路串联 |
+| `traceId` | 调用方传入（generate 传 sessionId） | adapter 内部日志（fetchTranscript 每层携带） |
+
+日志全部为结构化 JSON（level/time/msg + 上下文字段），可直接按 sessionId 聚合完整链路。
+
+### 错误分级语义
+
+| 级别 | 例子 | 处理策略 |
+|---|---|---|
+| **fatal 定性** | 视频不存在、确定无字幕（`not-found` / `no-captions`） | 立即短路，不再降级——降级链解决不了内容问题 |
+| **可降级** | 某层网络失败、`LOGIN_REQUIRED` 风控 | 落入降级链下一层 |
+| **可重试** | 5W1H 返回非法 JSON / 字段缺失 | 自动重试 1 次 |
+| **不重试** | Gemini 429 限流、401/403 鉴权错误 | 直接透出友好提示——重试只会浪费配额 |
