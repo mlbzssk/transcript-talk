@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Transcript Talk · YouTube → 中文对话文章</title>
+<style>
+  :root {
+    --bg: #f7f7f4;
+    --card: #ffffff;
+    --ink: #1c1e21;
+    --ink-2: #5c6066;
+    --ink-3: #9a9ea5;
+    --line: #e6e6e1;
+    --accent: #4f46e5;
+    --accent-soft: #eef2ff;
+    --speaker-a: #4f46e5;
+    --speaker-b: #0f766e;
+    --danger: #b91c1c;
+    --danger-bg: #fef2f2;
+    --info-bg: #f0f9ff;
+    --info-ink: #075985;
+    --radius: 14px;
+    --serif: "New York", "Songti SC", "Noto Serif SC", Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-font-smoothing: antialiased; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.7;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 24px 20px 80px; }
+
+  header.hero { text-align: center; padding: 40px 0 28px; }
+  header.hero h1 {
+    font-family: var(--serif); font-size: 30px; margin: 0 0 8px; letter-spacing: .5px;
+  }
+  header.hero p { color: var(--ink-2); margin: 0; font-size: 15px; }
+
+  /* ── 输入卡 ── */
+  .input-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+  .url-row { display: flex; gap: 10px; }
+  .url-row input {
+    flex: 1; padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px;
+    font-size: 15px; font-family: inherit; outline: none; min-width: 0; transition: border-color .15s;
+  }
+  .url-row input:focus { border-color: var(--accent); }
+  button {
+    font-family: inherit; cursor: pointer; border: none; border-radius: 10px;
+    padding: 11px 20px; font-size: 15px; transition: opacity .15s, transform .05s;
+  }
+  button:active { transform: scale(.98); }
+  button:disabled { cursor: not-allowed; opacity: .55; }
+  .btn-primary { background: var(--accent); color: #fff; font-weight: 600; white-space: nowrap; }
+  .btn-ghost { background: transparent; color: var(--accent); padding: 6px 10px; font-size: 14px; }
+  .btn-stop { background: #fee2e2; color: var(--danger); }
+
+  details.adv { margin-top: 14px; }
+  details.adv summary { cursor: pointer; color: var(--ink-2); font-size: 14px; user-select: none; }
+  details.adv textarea {
+    width: 100%; margin-top: 10px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px;
+    font-family: inherit; font-size: 14px; resize: vertical; min-height: 74px; outline: none;
+  }
+  details.adv textarea:focus { border-color: var(--accent); }
+  .hint { color: var(--ink-3); font-size: 13px; margin-top: 6px; }
+  .quick-row { margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-3); }
+
+  /* ── 状态条 ── */
+  .status { border-radius: 10px; padding: 11px 14px; font-size: 14px; margin-top: 18px; display: flex; gap: 10px; align-items: flex-start; }
+  .status.error { background: var(--danger-bg); color: var(--danger); }
+  .status.info { background: var(--info-bg); color: var(--info-ink); }
+  .hidden { display: none !important; }
+
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+    border-radius: 50%; display: inline-block; vertical-align: -2px; animation: spin .7s linear infinite;
+  }
+  .spinner.dark { border-color: var(--line); border-top-color: var(--accent); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── 文章 ── */
+  .meta-chip {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 4px; font-size: 13px; color: var(--ink-2);
+  }
+  .meta-chip span { background: var(--accent-soft); border-radius: 999px; padding: 3px 12px; }
+
+  .article-hero { padding: 26px 6px 6px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+  .article-hero h2 { font-family: var(--serif); font-size: 26px; margin: 0 0 6px; line-height: 1.4; }
+  .article-hero .lead { color: var(--ink-2); font-size: 15px; }
+
+  section.chapter { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 22px 14px; margin-top: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+  section.preface { background: transparent; border: none; box-shadow: none; padding: 10px 6px; }
+  .chapter-head { display: flex; align-items: center; gap: 10px; padding: 10px 0 4px; }
+  .chapter-head h3 { font-family: var(--serif); font-size: 19px; margin: 0; flex: 1; }
+  .btn-5w1h {
+    font-size: 12.5px; padding: 3px 10px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent); font-weight: 600; letter-spacing: .3px;
+  }
+  .btn-5w1h:hover:not(:disabled) { background: #e0e7ff; }
+
+  .dialogue { margin: 10px 0; display: flex; gap: 10px; align-items: baseline; }
+  .dialogue .speaker {
+    flex: none; font-weight: 700; font-size: 14px; color: var(--speaker-a);
+    min-width: 3.5em; text-align: right;
+  }
+  .dialogue.alt .speaker { color: var(--speaker-b); }
+  .dialogue .line { flex: 1; }
+  .dialogue .line p { margin: 0; }
+  .dialogue .line p + p { margin-top: 6px; }
+
+  article p.para { margin: 10px 0; color: var(--ink); }
+  .list-item { color: var(--ink); margin: 6px 0 6px 6px; }
+  .list-item::before { content: "· "; color: var(--ink-3); font-weight: 700; }
+  strong { font-weight: 700; }
+
+  .pending::after {
+    content: ""; display: inline-block; width: 8px; height: 1.05em; background: var(--accent);
+    vertical-align: -2px; margin-left: 2px; animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ── 5W1H 面板 ── */
+  .w5h1 { margin: 14px 0 6px; border-top: 1px dashed var(--line); padding-top: 14px; }
+  .w5h1 .w5h1-title { font-size: 13px; font-weight: 700; color: var(--ink-3); letter-spacing: 1px; margin-bottom: 10px; }
+  .w5h1-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .w5h1-item { background: #fafaf7; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  .w5h1-item dt { font-size: 12.5px; font-weight: 700; color: var(--accent); letter-spacing: .5px; }
+  .w5h1-item dd { margin: 4px 0 0; font-size: 14px; color: var(--ink); line-height: 1.6; }
+  .w5h1-item.demo::after { content: "演示示例"; display: block; margin-top: 6px; font-size: 11px; color: var(--ink-3); }
+  .w5h1-error { font-size: 13.5px; color: var(--danger); }
+  @media (max-width: 560px) {
+    .w5h1-grid { grid-template-columns: 1fr; }
+    .dialogue { flex-direction: column; gap: 2px; }
+    .dialogue .speaker { text-align: left; min-width: 0; }
+    .url-row { flex-direction: column; }
+  }
+
+  footer { text-align: center; color: var(--ink-3); font-size: 13px; margin-top: 56px; line-height: 1.9; }
+  footer a { color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <h1>Transcript Talk</h1>
+    <p>输入一个有字幕的 YouTube 视频，Gemini 将其转写为一篇章节化的中文对谈文章，并为每章生成 5W1H 总结。</p>
+  </header>
+
+  <section class="input-card">
+    <div class="url-row">
+      <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
+      <button id="go" class="btn-primary">生成文章</button>
+      <button id="stop" class="btn-stop hidden">停止</button>
+    </div>
+    <details class="adv" id="adv">
+      <summary>生成要求（可选）—— 任务类型 / 输出风格 / 目标受众 / 约束条件</summary>
+      <textarea id="req" placeholder="例如：面向非技术管理者的商务简报，轻松但不失专业，聚焦成本与风险，全文控制在 800 字，不要出现代码术语。"></textarea>
+      <div class="hint">留空则按默认风格生成；生成内容会体现这些约束，但不会超出该范围。</div>
+    </details>
+    <div class="quick-row">
+      一键体验：
+      <button class="btn-ghost" id="demo">载入演示视频（a16z: Marc Andreessen's 2026 Outlook）</button>
+    </div>
+  </section>
+
+  <div id="status" class="status hidden"></div>
+  <div id="meta" class="meta-chip hidden"></div>
+  <article id="article"></article>
+
+  <footer>
+    基于 Cloudflare Worker + Gemini · 流式生成 · 章节级 5W1H<br>
+    服务端保存会话上下文，总结请求不回传文章内容
+  </footer>
+</div>
+
+<script>
+"use strict";
+/* ═══════════════ 模块：状态 ═══════════════ */
+const $ = (id) => document.getElementById(id);
+const els = {
+  url: $("url"), req: $("req"), go: $("go"), stop: $("stop"), demo: $("demo"),
+  status: $("status"), meta: $("meta"), article: $("article"),
+};
+
+const state = {
+  generating: false,
+  abort: null,
+  sessionId: null,
+  buffer: "",          // 流式文本缓冲（含未完成行）
+  pendingEl: null,     // 当前进行中的行（打字机）
+  chapterCount: 0,     // 对话者交替着色用
+  sections: [],        // { index, title, headEl, contentEl, btn, panel, cache }
+  contentHost: null,   // 当前行落点容器
+  summaries: new Map(),
+};
+
+/* ═══════════════ 模块：api（对后端的全部认知） ═══════════════
+ * 独立部署逃生舱：改为完整 API 地址即可，如 "https://api.example.workers.dev" */
+const API_BASE = "";
+
+async function postSse(path, body, onEvent, signal) {
+  const res = await fetch(API_BASE + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) {
+    let msg = "请求失败（" + res.status + "）";
+    try { msg = (await res.json()).error || msg; } catch (e) {}
+    throw new Error(msg);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";                       // 跨 chunk 缓冲：一个 SSE 事件可能被 TCP 分包切开
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const frame = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const line = frame.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+      try { onEvent(JSON.parse(line.slice(5).trim())); } catch (e) {}
+    }
+  }
+}
+
+async function postJson(path, body) {
+  const res = await fetch(API_BASE + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "请求失败（" + res.status + "）");
+  return data;
+}
+
+/* ═══════════════ 模块：markdown（先转义后替换，天然免疫 XSS） ═══════════════ */
+const esc = (s) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+const inline = (s) =>
+  esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+/* ═══════════════ 模块：渲染（流式章节化） ═══════════════ */
+function resetArticle() {
+  els.article.innerHTML = "";
+  els.meta.classList.add("hidden");
+  state.buffer = "";
+  state.pendingEl = null;
+  state.chapterCount = 0;
+  state.sections = [];
+  state.summaries.clear();
+  state.sessionId = null;
+  const preface = makeSection(null);
+  state.contentHost = preface.contentEl;
+}
+
+function makeSection(title) {
+  const sec = document.createElement("section");
+  sec.className = "chapter" + (title ? "" : " preface");
+  const index = state.sections.length;
+
+  let headEl = null, btn = null, panel = null;
+  if (title) {
+    headEl = document.createElement("div");
+    headEl.className = "chapter-head";
+    const h3 = document.createElement("h3");
+    h3.textContent = title;                    // textContent：不解析 HTML
+    btn = document.createElement("button");
+    btn.className = "btn-5w1h";
+    btn.textContent = "5W1H";
+    btn.disabled = true;                       // 生成完成前不可点
+    btn.addEventListener("click", () => toggle5w1h(entry));
+    headEl.append(h3, btn);
+    sec.appendChild(headEl);
+  }
+
+  const contentEl = document.createElement("div");
+  contentEl.className = "chapter-body";
+  sec.appendChild(contentEl);
+
+  panel = document.createElement("div");
+  panel.className = "w5h1 hidden";
+  sec.appendChild(panel);
+
+  els.article.appendChild(sec);
+  const entry = { index, title: title || "", headEl, contentEl, btn, panel, cache: null, open: false, loading: false };
+  state.sections.push(entry);
+  return entry;
+}
+
+function renderDelta(text) {
+  state.buffer += text;
+  // 只处理完整行；未完成行作为 pending 展示（规避半截 Markdown 语法）
+  let nl;
+  while ((nl = state.buffer.indexOf("\n")) !== -1) {
+    const line = state.buffer.slice(0, nl);
+    state.buffer = state.buffer.slice(nl + 1);
+    flushPending();
+    renderLine(line);
+  }
+  showPending();
+}
+
+function flushPending() {
+  if (state.pendingEl) { state.pendingEl.remove(); state.pendingEl = null; }
+}
+
+function showPending() {
+  if (!state.buffer || /^\s*$/.test(state.buffer)) return;
+  if (!state.pendingEl) {
+    state.pendingEl = document.createElement("p");
+    state.pendingEl.className = "para pending";
+    state.contentHost.appendChild(state.pendingEl);
+  }
+  state.pendingEl.textContent = state.buffer;   // 纯文本展示进行中的行
+}
+
+function renderLine(raw) {
+  const line = raw.trimEnd();
+  if (/^\s*$/.test(line)) return;
+
+  let m;
+  if ((m = line.match(/^##\s+(.+?)\s*$/))) {            // 新章节
+    const sec = makeSection(m[1]);
+    state.contentHost = sec.contentEl;
+    return;
+  }
+  if ((m = line.match(/^#\s+(.+?)\s*$/))) {             // 文章主标题
+    const hero = document.createElement("div");
+    hero.className = "article-hero";
+    const h2 = document.createElement("h2");
+    h2.textContent = m[1];
+    hero.appendChild(h2);
+    els.article.insertBefore(hero, els.article.firstChild);
+    return;
+  }
+  if ((m = line.match(/^\*\*(.+?)\*\*\s*[:：]\s*(.*)$/))) { // 对话行
+    const p = document.createElement("p");
+    p.className = "dialogue" + (state.chapterCount++ % 2 ? " alt" : "");
+    const who = document.createElement("span");
+    who.className = "speaker";
+    who.textContent = m[1];
+    const say = document.createElement("span");
+    say.className = "line";
+    say.innerHTML = inline(m[2]);               // inline 内部已先做 HTML 转义
+    p.append(who, say);
+    state.contentHost.appendChild(p);
+    return;
+  }
+  if ((m = line.match(/^[-*]\s+(.+)$/))) {              // 列表
+    const p = document.createElement("p");
+    p.className = "list-item";
+    p.innerHTML = inline(m[1]);
+    state.contentHost.appendChild(p);
+    return;
+  }
+  const p = document.createElement("p");
+  p.className = "para";
+  p.innerHTML = inline(line);
+  state.contentHost.appendChild(p);
+}
+
+function finishArticle(finishReason) {
+  flushPending();
+  for (const sec of state.sections) {
+    if (sec.btn) sec.btn.disabled = false;
+  }
+  if (finishReason === "MAX_TOKENS") {
+    showStatus("已达到模型输出长度上限，文章可能被截断。可在「生成要求」中限制篇幅后重试。", "error");
+  }
+}
+
+/* ═══════════════ 模块：5W1H ═══════════════ */
+async function toggle5w1h(sec) {
+  if (sec.open) { sec.panel.classList.add("hidden"); sec.open = false; return; }
+  sec.panel.classList.remove("hidden");
+  sec.open = true;
+  if (sec.cache) { renderSummary(sec.panel, sec.cache); return; }
+
+  sec.loading = true;
+  const title = sec.title;
+  sec.panel.innerHTML = '<div class="w5h1-title">5W1H 总结</div><p class="para"><span class="spinner dark"></span> 正在结合全片内容总结本章…</p>';
+  try {
+    const data = await postJson("/api/summarize", {
+      sessionId: state.sessionId,
+      sectionTitle: title,
+      sectionIndex: sec.index,
+    });
+    sec.cache = data;
+    renderSummary(sec.panel, data);
+  } catch (e) {
+    sec.panel.innerHTML = '<div class="w5h1-title">5W1H 总结</div><p class="w5h1-error">' + esc(e.message) + "</p>";
+  } finally {
+    sec.loading = false;
+  }
+}
+
+function renderSummary(panel, data) {
+  const s = data.summary;
+  const items = [
+    ["Who", s.who], ["What", s.what], ["When", s.when],
+    ["Where", s.where], ["Why", s.why], ["How", s.how],
+  ];
+  panel.innerHTML =
+    '<div class="w5h1-title">5W1H 总结</div>' +
+    '<div class="w5h1-grid">' +
+    items.map(([k, v]) =>
+      '<div class="w5h1-item' + (data.demo ? " demo" : "") + '"><dt>' + k + "</dt><dd>" + esc(v) + "</dd></div>"
+    ).join("") +
+    "</div>";
+}
+
+/* ═══════════════ 模块：UI 状态 ═══════════════ */
+function showStatus(message, kind) {
+  els.status.className = "status " + (kind || "info");
+  els.status.textContent = message;
+  els.status.classList.remove("hidden");
+}
+
+function setGenerating(on) {
+  state.generating = on;
+  els.go.classList.toggle("hidden", on);
+  els.stop.classList.toggle("hidden", !on);
+  els.go.disabled = on;
+  els.url.disabled = on;
+  els.req.disabled = on;
+}
+
+/* 滚动跟随：贴近底部时自动跟随，用户上滚即停 */
+function autoScroll() {
+  const nearBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 120;
+  if (nearBottom) window.scrollTo({ top: document.documentElement.scrollHeight });
+}
+
+/* ═══════════════ 模块：主流程 ═══════════════ */
+async function generate() {
+  const url = els.url.value.trim();
+  if (!url) { els.url.focus(); showStatus("请先输入 YouTube 视频链接", "error"); return; }
+
+  els.status.classList.add("hidden");
+  resetArticle();
+  setGenerating(true);
+  state.abort = new AbortController();
+
+  try {
+    await postSse("/api/generate", { url, request: els.req.value.trim() }, (ev) => {
+      if (ev.type === "session") {
+        state.sessionId = ev.id;
+        els.meta.classList.remove("hidden");
+        els.meta.innerHTML = "";   // textContent 逐个添加，防注入
+        const chips = [ev.videoTitle || "视频", "字幕：" + ev.transcriptSource];
+        if (ev.demoMode) chips.push("演示模式");
+        for (const c of chips) {
+          const s = document.createElement("span");
+          s.textContent = c;
+          els.meta.appendChild(s);
+        }
+      } else if (ev.type === "info") {
+        showStatus(ev.message, "info");
+      } else if (ev.type === "delta") {
+        renderDelta(ev.text);
+        autoScroll();
+      } else if (ev.type === "done") {
+        finishArticle(ev.finishReason);
+      } else if (ev.type === "error") {
+        showStatus(ev.message, "error");
+      }
+    }, state.abort.signal);
+  } catch (e) {
+    if (e.name === "AbortError") {
+      showStatus("已停止生成", "info");
+    } else {
+      showStatus(e.message || "网络错误", "error");
+    }
+  } finally {
+    setGenerating(false);
+    flushPending();
+    autoScroll();
+  }
+}
+
+els.go.addEventListener("click", generate);
+els.stop.addEventListener("click", () => state.abort && state.abort.abort());
+els.demo.addEventListener("click", () => {
+  els.url.value = "https://www.youtube.com/watch?v=xRh2sVcNXQ8";
+  els.url.focus();
+  showStatus("已载入演示视频链接，点击「生成文章」开始。若 YouTube 风控导致字幕抓取失败，将自动回退内置演示字幕。", "info");
+});
+els.url.addEventListener("keydown", (e) => { if (e.key === "Enter" && !state.generating) generate(); });
+
+resetArticle();
+</script>
+</body>
+</html>

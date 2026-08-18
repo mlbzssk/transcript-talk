@@ -1,0 +1,14 @@
+# deps
+node_modules/
+
+# wrangler 本地状态与 secrets（.dev.vars 可能含 GEMINI_API_KEY，严禁提交）
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# build
+dist/
+
+# misc
+*.log
+.DS_Store

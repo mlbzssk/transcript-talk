@@ -1,0 +1,24 @@
+name = "transcript-talk"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 静态页面由 Cloudflare Assets 托管；未命中静态资源的请求进入 Worker（/api/*）
+[assets]
+directory = "./public"
+
+# 会话上下文存储（可选）：未配置时代码自动降级为内存存储。
+# 启用方式：
+#   npx wrangler kv namespace create SESSIONS
+#   将返回的 id 填到下面并取消注释
+# [[kv_namespaces]]
+# binding = "SESSIONS"
+# id = "<fill-after-create>"
+
+[vars]
+# 全部可选——按 README 配置 secrets/vars 后逐项启用
+# GEMINI_MODEL = "gemini-2.5-flash"
+# PROXY_HOST = "xxx.webshare.io"     # webshare.io 代理（应对 YouTube 风控）
+# PROXY_PORT = "80"
+# PROXY_USERNAME = ""
+# PROXY_PASSWORD = ""
