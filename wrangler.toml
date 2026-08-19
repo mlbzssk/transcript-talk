@@ -7,13 +7,10 @@ compatibility_flags = ["nodejs_compat"]
 [assets]
 directory = "./public"
 
-# 会话上下文存储（可选）：未配置时代码自动降级为内存存储。
-# 启用方式：
-#   npx wrangler kv namespace create SESSIONS
-#   将返回的 id 填到下面并取消注释
-# [[kv_namespaces]]
-# binding = "SESSIONS"
-# id = "<fill-after-create>"
+# 会话上下文存储：Cloudflare KV（内存优先 + KV 兜底；无需 Redis）
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "eda7ea8017fd40579bd6e1465d8fd656"
 
 [vars]
 # 全部可选——按 README 配置 secrets/vars 后逐项启用

@@ -5,8 +5,9 @@
 
 ## 在线体验
 
-部署后的公开网址示例：`https://transcript-talk.<your-subdomain>.workers.dev`
-（本地运行：`npm install && npm run dev` → http://localhost:8787）
+- 公开访问：[https://transcript-talk.mlbzssk.workers.dev/](https://transcript-talk.mlbzssk.workers.dev/)
+- GitHub：[https://github.com/mlbzssk/transcript-talk](https://github.com/mlbzssk/transcript-talk)
+- 本地运行：`npm install && npm run dev` → http://localhost:8787
 
 ---
 
@@ -232,15 +233,42 @@ npx wrangler secret put PROXY_HOST
 npx wrangler secret put PROXY_PORT
 npx wrangler secret put PROXY_USERNAME
 npx wrangler secret put PROXY_PASSWORD
-# 可选：会话 KV（未配置时自动降级为内存）
+# 推荐：会话 KV（生产多 isolate 下保证 5W1H 可读；无需 Redis）
 npx wrangler kv namespace create SESSIONS
-#   把返回的 id 填到 wrangler.toml 的 [[kv_namespaces]] 处
+#   把返回的 id 填到 wrangler.toml 的 [[kv_namespaces]] 处并取消注释
 
 npm run deploy
 ```
 
-部署结果形如 `https://transcript-talk.<subdomain>.workers.dev`。
+当前线上：https://transcript-talk.mlbzssk.workers.dev/  
 注：`*.workers.dev` 在部分地区（特别是国内）访问可能不稳定，绑定自定义域名最稳。
+
+### 生产会话存储（Cloudflare KV，不是 Redis）
+
+5W1H 依赖服务端保存的生成上下文。Worker 是多 isolate 的：请求可能落到不同实例。
+
+| 方案 | 需要吗 | 说明 |
+|------|--------|------|
+| **Cloudflare KV** | 生产推荐 | 代码已接好（`store.ts`：内存优先 + KV 兜底）。免费额度通常够演示/笔试。 |
+| 内存 Map | 默认兜底 | 未绑 KV 时自动用；同实例可用，跨 isolate 可能 404。 |
+| Redis / Upstash | **不需要** | 本项目未接入；会话仅 1 小时 TTL、读写简单，KV 足够。 |
+
+启用步骤：
+
+```bash
+npx wrangler kv namespace create SESSIONS
+# 输出类似：id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+在 `wrangler.toml` 取消注释并填入 id：
+
+```toml
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+然后 `npm run deploy`。用 `GET /api/health` 看 `"kv": true` 即绑定成功。
 
 ---
 
@@ -311,7 +339,7 @@ npm run deploy
 ### 轻量六边形分层
 
 ```
-xvc-assignment/
+transcript-talk/
 ├── public/index.html        表现层（零依赖单文件；对后端的全部认知 = 2 个 POST 端点 + 5 类 SSE 事件）
 ├── src/
 │   ├── index.ts             入口层 · thin edge（路由分发 + 全局异常兜底，无业务逻辑）
