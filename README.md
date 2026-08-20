@@ -95,7 +95,7 @@ Worker
 - **SSE 通道先建立，字幕抓取在后台泵**：参数校验通过即返回 SSE 响应，字幕降级链与生成都在后台执行——`stage` 进度事件从降级链第一层就能推到浏览器，全程无黑盒期
 - **API Key 走 `x-goog-api-key` 请求头**（不出现在任何 URL 与日志里）
 - **`maxOutputTokens: 32768`**（中文长文章必填，默认 8192 会拦腰截断）
-- **`thinkingBudget: 0`**（仅 flash 系列）—— 文章生成场景不需要深度推理，但会拖慢首字延迟 5-15 秒，严重影响打字机体验
+- **thinking 压低**（flash 系列：2.x 用 `thinkingBudget: 0`，3.x 用 `thinkingLevel: "low"`）—— 文章生成场景不需要深度推理，但会拖慢首字延迟 5-15 秒，严重影响打字机体验
 - **响应中断检测**：`finishReason === "MAX_TOKENS"` 时前端提示「达到模型输出长度上限」
 - **客户端断开**：`AbortController` 传播到 `fetch` + 上游 Gemini 流 `signal`，不浪费配额
 
@@ -228,9 +228,17 @@ npm test             # vitest，9 个文件 55 个用例
 
 ```bash
 npx wrangler login                                    # 首次需要 Cloudflare 账号
+
+# 方案 A：Gemini（Google AI Studio）
 npx wrangler secret put GEMINI_API_KEY                # 从 https://aistudio.google.com/apikey 获取
-# 可选：若默认模型 gemini-2.5-flash 返回 404（模型已下线/Key 无权限），显式指定可用模型
-# npx wrangler secret put GEMINI_MODEL                  # 如 gemini-3-flash 等，以 aistudio 模型页为准
+# 可选：若默认模型 gemini-3.5-flash 返回 404（模型已下线/Key 无权限），显式指定可用模型
+# npx wrangler secret put GEMINI_MODEL                  # 如 gemini-3.5-flash 等，以 aistudio 模型页为准
+
+# 方案 B：OpenAI 兼容供应商（DeepSeek / 智谱 GLM / Kimi / 通义千问 / OpenRouter）
+# 适合 Google 账号被风控、或不想依赖 Google 的场景；配置后优先于 Gemini
+npx wrangler secret put OPENAI_API_KEY                # 如 https://platform.deepseek.com 注册获取
+# npx wrangler secret put OPENAI_BASE_URL              # 默认 https://api.deepseek.com/v1
+# npx wrangler secret put OPENAI_MODEL                 # 默认 deepseek-chat
 # 可选：webshare 代理
 npx wrangler secret put PROXY_HOST
 npx wrangler secret put PROXY_PORT

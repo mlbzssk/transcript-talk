@@ -52,7 +52,7 @@ export interface SessionContext {
   transcriptText: string;
   article: string;
   createdAt: number;
-  /** 演示模式（无 GEMINI_API_KEY）生成的会话 */
+  /** 演示模式（无 LLM API Key：GEMINI_API_KEY 与 OPENAI_API_KEY 均未配）生成的会话 */
   demo: boolean;
 }
 
@@ -88,12 +88,34 @@ export class ClientDisconnected extends Error {
   }
 }
 
+/**
+ * LLM 供应商统一业务错误（routes 据此映射 HTTP 状态与用户文案）。
+ * GeminiError 为其子类，OpenAI 兼容适配器直接抛出。
+ */
+export class LLMError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+/** 流式生成 chunk（与供应商无关的归一化协议，各适配器产出） */
+export interface StreamChunk {
+  text?: string;
+  finishReason?: string;
+}
+
 /** Worker 环境绑定（[vars] + secrets，全部可选——未配置时逐项降级） */
 export interface AppEnv {
-  /** Gemini AI Studio API Key；未配置 → 演示模式（假流） */
+  /** Gemini AI Studio API Key；OPENAI_API_KEY 未配置时启用 */
   GEMINI_API_KEY?: string;
-  /** 默认 gemini-2.5-flash（flash 系列自动关闭 thinking 保证首字延迟） */
+  /** 默认 gemini-3.5-flash（flash 系列压低 thinking 保证首字延迟） */
   GEMINI_MODEL?: string;
+  /** OpenAI 兼容供应商 Key（DeepSeek/GLM/Kimi/OpenRouter 等）；配置后优先于 Gemini */
+  OPENAI_API_KEY?: string;
+  /** 默认 https://api.deepseek.com/v1；其他供应商填其 OpenAI 兼容端点 */
+  OPENAI_BASE_URL?: string;
+  /** 默认 deepseek-chat */
+  OPENAI_MODEL?: string;
   /** webshare.io 代理四元组；未配置 → 跳过代理层 */
   PROXY_HOST?: string;
   PROXY_PORT?: string;

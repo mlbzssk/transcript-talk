@@ -2,7 +2,7 @@ import { buildSummaryPrompt } from "../core/prompts";
 import { logger } from "../core/logger";
 import { findSection, splitSections } from "../core/markdown";
 import type { AppEnv } from "../core/types";
-import { generateJson, geminiConfigured, GeminiError } from "../adapters/gemini";
+import { generateJson, llmConfigured, LLMError } from "../adapters/llm";
 import { loadSession } from "../adapters/store";
 import { DEMO_SUMMARIES } from "../demo-transcript";
 import { jsonResponse } from "./http";
@@ -44,13 +44,13 @@ export async function handleSummarize(request: Request, env: AppEnv): Promise<Re
   }
 
   // 演示模式：仅内置示例章节，其余明确告知限制（不静默造假）
-  if (ctx.demo || !geminiConfigured(env)) {
+  if (ctx.demo || !llmConfigured(env)) {
     const seed = DEMO_SUMMARIES[section.title];
     logger.debug("summarize 演示模式分支", { sessionId, sectionTitle, hit: !!seed });
     if (seed) return jsonResponse({ summary: seed, demo: true });
     return jsonResponse(
       {
-        error: `演示模式仅「${Object.keys(DEMO_SUMMARIES)[0]}」章节内置 5W1H 示例；配置 GEMINI_API_KEY 后即可总结任意章节`,
+        error: `演示模式仅「${Object.keys(DEMO_SUMMARIES)[0]}」章节内置 5W1H 示例；配置 API Key（GEMINI_API_KEY 或 OPENAI_API_KEY）后即可总结任意章节`,
       },
       503,
     );
@@ -80,8 +80,8 @@ export async function handleSummarize(request: Request, env: AppEnv): Promise<Re
     });
     return jsonResponse({ summary });
   } catch (e) {
-    const message = e instanceof GeminiError ? e.message : "总结生成失败，请重试";
-    const status = e instanceof GeminiError ? e.status : 500;
+    const message = e instanceof LLMError ? e.message : "总结生成失败，请重试";
+    const status = e instanceof LLMError ? e.status : 500;
     logger.error("summarize 生成失败", {
       requestId,
       sessionId,

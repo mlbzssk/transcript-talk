@@ -10,7 +10,7 @@ import type { Summary5W1H, Transcript } from "./core/types";
  * 以下字幕为依据原视频主题（a16z: "Marc Andreessen's 2026 Outlook: AI Timelines,
  * US vs. China, and The Price of AI"）人工整理的演示转写，用于：
  *   1. 演示视频的自动兜底（仅当请求的是 DEMO_VIDEO_ID）
- *   2. 无 GEMINI_API_KEY 时的演示模式
+ *   2. 无 LLM API Key 时的演示模式（GEMINI_API_KEY 与 OPENAI_API_KEY 至少其一）
  */
 
 export const DEMO_VIDEO_ID = "xRh2sVcNXQ8";
@@ -131,7 +131,7 @@ export const DEMO_TRANSCRIPT: Transcript = {
   source: "demo",
 };
 
-/** 无 GEMINI_API_KEY 时的演示文章（假流逐字下发，复刻基础演示效果） */
+/** 无 LLM API Key 时的演示文章（假流逐字下发，复刻基础演示效果） */
 export const DEMO_ARTICLE = `# 对话安德森：AI 革命的万亿美金之问
 
 当大模型的算力投入被质疑为泡沫，Marc Andreessen（下称 Mark）给出了一个充满历史感的回答：光纤危机崩溃的是股票，而不是光纤。本文以对话形式复盘这场关于 2026 年 AI 走向的深谈。

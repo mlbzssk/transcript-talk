@@ -1,4 +1,4 @@
-import type { Summary5W1H } from "../core/types";
+import { LLMError, type StreamChunk, type Summary5W1H } from "../core/types";
 import { logger } from "../core/logger";
 
 export interface GeminiEnv {
@@ -6,22 +6,27 @@ export interface GeminiEnv {
   GEMINI_MODEL?: string;
 }
 
-export class GeminiError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
+/** 继承统一 LLMError：routes 只需 instanceof LLMError 即可同时覆盖两家供应商 */
+export class GeminiError extends LLMError {
+  constructor(status: number, message: string) {
+    super(status, message);
   }
 }
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-const DEFAULT_MODEL = "gemini-2.5-flash";
+/** 2.5-flash 将于 2026-10-16 退役，默认用官方迁移目标 3.5-flash */
+const DEFAULT_MODEL = "gemini-3.5-flash";
 
 export const geminiConfigured = (env: GeminiEnv): boolean => !!env.GEMINI_API_KEY;
 
 const modelOf = (env: GeminiEnv): string => env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
 
-/** thinkingBudget=0 加快首字延迟，但仅 flash 系列接受 0（pro 系列最低 128） */
-const thinkingOff = (model: string): object =>
-  /flash/.test(model) ? { thinkingConfig: { thinkingBudget: 0 } } : {};
+/** 压低 thinking 保首字延迟：Gemini 3+ 与 latest 别名用 thinkingLevel=low（3.x 无法彻底关闭），2.x flash 用 thinkingBudget=0，其余不设 */
+const thinkingLow = (model: string): object => {
+  if (/^gemini-[3-9]|flash-latest/.test(model)) return { thinkingConfig: { thinkingLevel: "low" } };
+  if (/flash/.test(model)) return { thinkingConfig: { thinkingBudget: 0 } };
+  return {};
+};
 
 function friendlyError(status: number, raw: string): GeminiError {
   if (status === 429) return new GeminiError(429, "Gemini 免费额度已限流，请稍等一分钟再试");
@@ -29,11 +34,6 @@ function friendlyError(status: number, raw: string): GeminiError {
   if (status === 403) return new GeminiError(403, "GEMINI_API_KEY 无权访问当前模型");
   if (status === 404) return new GeminiError(404, "GEMINI_MODEL 配置的模型不存在");
   return new GeminiError(status, `Gemini 请求失败（${status}），请稍后重试`);
-}
-
-export interface StreamChunk {
-  text?: string;
-  finishReason?: string;
 }
 
 /**
@@ -57,7 +57,7 @@ export async function* streamGenerate(
       generationConfig: {
         temperature: 0.7,
         maxOutputTokens: 32768,
-        ...thinkingOff(model),
+        ...thinkingLow(model),
       },
     }),
   });
@@ -132,7 +132,7 @@ export async function generateJson(
           maxOutputTokens: 2048,
           responseMimeType: "application/json",
           responseSchema: SCHEMA_5W1H,
-          ...thinkingOff(model),
+          ...thinkingLow(model),
         },
       }),
     });

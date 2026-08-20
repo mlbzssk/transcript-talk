@@ -3,7 +3,7 @@ import { logger } from "./core/logger";
 import { handleGenerate } from "./routes/generate";
 import { handleSummarize } from "./routes/summarize";
 import { CORS, jsonResponse } from "./routes/http";
-import { geminiConfigured } from "./adapters/gemini";
+import { geminiConfigured, llmConfigured, openaiConfigured, providerOf } from "./adapters/llm";
 import { proxyConfigured } from "./adapters/proxy";
 
 export { AppEnv } from "./core/types";
@@ -38,7 +38,10 @@ export default {
       } else if (isHealth && request.method === "GET") {
         res = jsonResponse({
           ok: true,
+          llm: llmConfigured(env),
+          provider: providerOf(env),
           gemini: geminiConfigured(env),
+          openai: openaiConfigured(env),
           proxy: proxyConfigured(env),
           kv: !!env.SESSIONS,
         });
