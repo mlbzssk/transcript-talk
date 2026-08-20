@@ -34,7 +34,14 @@ export async function saveSession(env: StoreEnv, id: string, ctx: SessionContext
 
 export async function loadSession(env: StoreEnv, id: string): Promise<SessionContext | null> {
   const local = mem.get(id);
-  if (local) return local;
+  if (local) {
+    // 内存层与 KV 同步过期：防 KV 已过期而内存仍命中的不一致
+    if (Date.now() - local.createdAt > TTL_SECONDS * 1000) {
+      mem.delete(id);
+    } else {
+      return local;
+    }
+  }
   if (env.SESSIONS) {
     try {
       const raw = await env.SESSIONS.get(id);

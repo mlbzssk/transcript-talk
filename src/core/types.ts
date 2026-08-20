@@ -77,6 +77,17 @@ export interface StageUpdate {
 }
 export type OnStage = (update: StageUpdate) => void;
 
+/**
+ * 客户端断开（用户停止/网络中断）——非故障信号。
+ * 定义在 core 供 routes 与 adapters 共享：onStage 回调抛出此错误时，
+ * 降级链须立即中止而非当作"该层网络失败"继续降级。
+ */
+export class ClientDisconnected extends Error {
+  constructor() {
+    super("client disconnected");
+  }
+}
+
 /** Worker 环境绑定（[vars] + secrets，全部可选——未配置时逐项降级） */
 export interface AppEnv {
   /** Gemini AI Studio API Key；未配置 → 演示模式（假流） */

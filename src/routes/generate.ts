@@ -2,6 +2,7 @@ import { buildArticlePrompt } from "../core/prompts";
 import { logger } from "../core/logger";
 import { extractVideoId, truncateTranscript } from "../core/transcript";
 import type { AppEnv, SseEvent } from "../core/types";
+import { ClientDisconnected } from "../core/types";
 import { GeminiError, geminiConfigured, streamGenerate } from "../adapters/gemini";
 import { fetchTranscript, YoutubeError } from "../adapters/youtube";
 import { saveSession } from "../adapters/store";
@@ -100,6 +101,7 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
             chars: transcript.text.length,
           });
         } catch (e) {
+          if (e instanceof ClientDisconnected) throw e; // 断开不是字幕失败，交外层定性
           const message = e instanceof YoutubeError ? e.message : "字幕获取失败，请稍后重试";
           logger.error("字幕获取失败", {
             sessionId,
@@ -215,13 +217,6 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
 
 function* chunkText(s: string, size: number): Generator<string> {
   for (let i = 0; i < s.length; i += size) yield s.slice(i, i + size);
-}
-
-/** 客户端断开（用户停止/网络中断）——非故障，日志单独定性 */
-class ClientDisconnected extends Error {
-  constructor() {
-    super("client disconnected");
-  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

@@ -7,6 +7,7 @@ import {
   pickTrack,
 } from "../core/transcript";
 import type { CaptionTrack, OnStage, Transcript } from "../core/types";
+import { ClientDisconnected } from "../core/types";
 import { proxyConfigured, proxyFetch, type ProxyEnv } from "./proxy";
 
 export class YoutubeError extends Error {
@@ -119,6 +120,8 @@ export async function fetchTranscript(
       }
     } catch (e) {
       if (e instanceof YoutubeError) throw e;
+      // onStage 抛错 = 调用方中止（客户端断开）：立即中止，不继续降级
+      if (e instanceof ClientDisconnected) throw e;
       /* 该层级网络失败，落入下一层 */
       logger.debug("fetchTranscript 该层网络失败", {
         traceId,
