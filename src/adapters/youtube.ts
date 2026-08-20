@@ -6,7 +6,7 @@ import {
   parseJson3,
   pickTrack,
 } from "../core/transcript";
-import type { CaptionTrack, Transcript } from "../core/types";
+import type { CaptionTrack, OnStage, Transcript } from "../core/types";
 import { proxyConfigured, proxyFetch, type ProxyEnv } from "./proxy";
 
 export class YoutubeError extends Error {
@@ -42,12 +42,23 @@ interface PlayerResult {
  * 生产环境建议配置 webshare 代理提升 ①③④ 层成功率。
  *
  * @param traceId 追踪标识（由调用方传入，如 generate 的 sessionId），仅用于日志串联
+ * @param onStage 进度回调（stepper 展示用）；detail 只描述确定性事实，不猜测失败归因
  */
 export async function fetchTranscript(
   env: YoutubeEnv,
   videoId: string,
   traceId?: string,
+  onStage?: OnStage,
 ): Promise<Transcript> {
+  const STAGE_DETAIL: Record<string, string> = {
+    innertube: "尝试 Innertube API…",
+    "watch-html": "改走 watch 页面解析…",
+    "innertube-proxy": "通过代理重试 Innertube API…",
+    "watch-html-proxy": "通过代理重试 watch 页解析…",
+  };
+  const stage = (status: "active" | "failed", detail?: string) =>
+    onStage?.({ step: "transcript", status, detail });
+
   const stages: Array<{ source: Transcript["source"]; run: () => Promise<PlayerResult | null> }> = [
     { source: "innertube", run: () => innertubePlayer(env, videoId, false) },
     { source: "watch-html", run: () => watchPagePlayer(env, videoId, false) },
@@ -56,15 +67,17 @@ export async function fetchTranscript(
   ];
 
   let lastPlayer: PlayerResult | null = null;
-  for (const stage of stages) {
-    if (stage.source.endsWith("proxy") && !proxyConfigured(env)) {
-      logger.debug("fetchTranscript 跳过代理层（未配置代理）", { traceId, videoId, source: stage.source });
+  for (const stageItem of stages) {
+    if (stageItem.source.endsWith("proxy") && !proxyConfigured(env)) {
+      logger.debug("fetchTranscript 跳过代理层（未配置代理）", { traceId, videoId, source: stageItem.source });
       continue;
     }
+    // 层级开始即上报（Innertube 内部多 client 轮试合并为一条，不逐个透出）
+    stage("active", STAGE_DETAIL[stageItem.source]);
     try {
-      const r = await stage.run();
+      const r = await stageItem.run();
       if (!r) {
-        logger.debug("fetchTranscript 该层未命中", { traceId, videoId, source: stage.source });
+        logger.debug("fetchTranscript 该层未命中", { traceId, videoId, source: stageItem.source });
         continue;
       }
       if (r.fatal) {
@@ -72,9 +85,10 @@ export async function fetchTranscript(
         logger.warn("fetchTranscript 定性失败", {
           traceId,
           videoId,
-          source: stage.source,
+          source: stageItem.source,
           fatal: r.fatal,
         });
+        stage("failed", r.fatal === "not-found" ? "视频不存在、私有或已下线" : "该视频没有可用字幕");
         throw new YoutubeError(
           r.fatal === "not-found" ? "视频不存在、私有或已下线" : "该视频没有可用字幕",
           r.fatal,
@@ -83,18 +97,25 @@ export async function fetchTranscript(
       if (r.tracks.length > 0) {
         lastPlayer = r;
         const track = pickTrack(r.tracks)!;
-        const text = await fetchCaptionBody(env, track.baseUrl, stage.source.endsWith("proxy"));
+        stage("active", `已找到字幕轨（${track.name}），正在拉取内容…`);
+        const text = await fetchCaptionBody(env, track.baseUrl, stageItem.source.endsWith("proxy"));
         if (text) {
-          return {
+          const result: Transcript = {
             videoId,
             title: r.title || track.name,
             author: r.author,
             languageCode: track.languageCode,
             text,
-            source: stage.source,
+            source: stageItem.source,
           };
+          onStage?.({
+            step: "transcript",
+            status: "done",
+            detail: `${result.text.length.toLocaleString()} 字`,
+          });
+          return result;
         }
-        logger.debug("fetchTranscript 字幕内容为空", { traceId, videoId, source: stage.source });
+        logger.debug("fetchTranscript 字幕内容为空", { traceId, videoId, source: stageItem.source });
       }
     } catch (e) {
       if (e instanceof YoutubeError) throw e;
@@ -102,7 +123,7 @@ export async function fetchTranscript(
       logger.debug("fetchTranscript 该层网络失败", {
         traceId,
         videoId,
-        source: stage.source,
+        source: stageItem.source,
         error: e instanceof Error ? e.message : String(e),
       });
     }
@@ -111,15 +132,15 @@ export async function fetchTranscript(
   // 全链路失败：演示视频回退硬编码字幕，其余给出明确错误
   if (videoId === DEMO_VIDEO_ID) {
     logger.warn("fetchTranscript 全链路失败，回退演示字幕", { traceId, videoId });
+    onStage?.({ step: "transcript", status: "done", detail: "回退内置演示字幕" });
     return DEMO_TRANSCRIPT;
   }
   logger.error("fetchTranscript 全链路失败", { traceId, videoId, hadPlayer: !!lastPlayer });
-  throw new YoutubeError(
-    lastPlayer
-      ? "字幕内容拉取失败（可能触发 YouTube 风控），可稍后重试或配置代理"
-      : "字幕获取失败：YouTube 对当前出口 IP 触发了风控（验证码），可稍后重试、配置 webshare 代理，或用演示视频体验",
-    "unavailable",
-  );
+  const failMessage = lastPlayer
+    ? "字幕内容拉取失败（可能触发 YouTube 风控），可稍后重试或配置代理"
+    : "字幕获取失败：YouTube 对当前出口 IP 触发了风控（验证码），可稍后重试、配置 webshare 代理，或用演示视频体验";
+  stage("failed", lastPlayer ? "字幕内容拉取失败，可配置代理后重试" : "YouTube 触发风控，全部方式均未成功");
+  throw new YoutubeError(failMessage, "unavailable");
 }
 
 /* ────────────────── 层级 1：Innertube player API（响应小、省 CPU） ────────────────── */
@@ -156,6 +177,15 @@ const INNERTUBE_CLIENTS = [
   },
 ];
 
+/**
+ * playabilityStatus.status === "ERROR" 的归因：
+ * 只有 reason 明确指向视频本身不可用时才定性 not-found；
+ * 其他 ERROR（如 client 被弃用 "no longer supported"、风控）不能定性——降级链继续。
+ */
+const VIDEO_GONE_REASONS = /video unavailable|does not exist|private|removed|terminated|account associated/i;
+
+const isVideoGone = (reason?: string): boolean => !!reason && VIDEO_GONE_REASONS.test(reason);
+
 async function innertubePlayer(env: YoutubeEnv, videoId: string, viaProxy: boolean): Promise<PlayerResult | null> {
   const url = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
   for (const c of INNERTUBE_CLIENTS) {
@@ -187,17 +217,36 @@ async function innertubePlayer(env: YoutubeEnv, videoId: string, viaProxy: boole
       };
       const status = player?.playabilityStatus?.status;
       if (status === "ERROR") {
-        return { title: "", author: "", tracks: [], fatal: "not-found" };
+        if (isVideoGone(player?.playabilityStatus?.reason)) {
+          return { title: "", author: "", tracks: [], fatal: "not-found" };
+        }
+        logger.debug("innertube client 返回 ERROR（非定性）", {
+          client: c.client.clientName,
+          reason: player?.playabilityStatus?.reason,
+        });
+        continue; // client 被弃用/风控等其他 ERROR → 换 client
       }
-      if (status !== "OK") continue; // LOGIN_REQUIRED 等 → 换 client
+      if (status !== "OK") {
+        // LOGIN_REQUIRED 等风控状态：记录具体 status/reason，排风控问题的第一手证据
+        logger.debug("innertube client 未放行", {
+          client: c.client.clientName,
+          status,
+          reason: player?.playabilityStatus?.reason,
+        });
+        continue; // 换 client
+      }
       const { title, author, tracks } = extractTracks(json);
       if (tracks.length === 0) {
         // player 正常但无字幕轨
         return { title, author, tracks, fatal: "no-captions" };
       }
       return { title, author, tracks };
-    } catch {
+    } catch (e) {
       /* 该 client 失败 → 换下一个 */
+      logger.debug("innertube client 请求异常", {
+        client: c.client.clientName,
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   }
   return null;
@@ -225,8 +274,9 @@ async function watchPagePlayer(env: YoutubeEnv, videoId: string, viaProxy: boole
     }
     const player = extractPlayerFromHtml(html);
     if (!player) return null;
-    const status = (player as { playabilityStatus?: { status?: string } }).playabilityStatus?.status;
-    if (status === "ERROR") {
+    const playability = (player as { playabilityStatus?: { status?: string; reason?: string } })
+      .playabilityStatus;
+    if (playability?.status === "ERROR" && isVideoGone(playability.reason)) {
       return { title: "", author: "", tracks: [], fatal: "not-found" };
     }
     const { title, author, tracks } = extractTracks(player);

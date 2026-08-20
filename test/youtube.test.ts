@@ -63,13 +63,26 @@ describe("fetchTranscript 降级链", () => {
     expect(t.text).toBe("hello world");
   });
 
-  it("playabilityStatus=ERROR → 定性 not-found，不再降级", async () => {
-    const errorBody = JSON.stringify({ playabilityStatus: { status: "ERROR" } });
+  it("ERROR + 明确不可用 reason（Video unavailable）→ 定性 not-found，不再降级", async () => {
+    const errorBody = JSON.stringify({
+      playabilityStatus: { status: "ERROR", reason: "Video unavailable" },
+    });
     const fetchMock = mockFetch([{ match: (u) => u.includes("youtubei/v1/player"), body: errorBody }]);
     vi.stubGlobal("fetch", fetchMock);
     await expect(fetchTranscript({}, "dQw4w9WgXcQ")).rejects.toMatchObject({ kind: "not-found" });
     // 第一个 client 即定性失败：不再轮试后续 client，也不走 watch 页
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ERROR + client 弃用 reason（no longer supported）→ 不定性，继续降级", async () => {
+    // 2026 实测：TVHTML5 client 返回 ERROR + "YouTube is no longer supported in this
+    // application or device."——与视频存在性无关，不能定性 not-found
+    const errorBody = JSON.stringify({
+      playabilityStatus: { status: "ERROR", reason: "YouTube is no longer supported in this application or device." },
+    });
+    vi.stubGlobal("fetch", mockFetch([{ match: (u) => u.includes("youtubei/v1/player"), body: errorBody }]));
+    // 三个 client 全部该错误 → 落入 watch 层（也失败）→ 全链路 unavailable（非 not-found）
+    await expect(fetchTranscript({}, "dQw4w9WgXcQ")).rejects.toMatchObject({ kind: "unavailable" });
   });
 
   it("全链路失败且非演示视频 → 抛 unavailable", async () => {

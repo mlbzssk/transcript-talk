@@ -62,7 +62,20 @@ export type SseEvent =
   | { type: "info"; message: string }
   | { type: "delta"; text: string }
   | { type: "done"; finishReason: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** 阶段进度（stepper 用）：过程性信息走 stage，一次性关键提示走 info */
+  | { type: "stage"; step: StageStep; status: StageStatus; detail?: string };
+
+export type StageStep = "transcript" | "generate";
+export type StageStatus = "active" | "done" | "failed";
+
+/** 字幕抓取过程的进度回调（降级链逐层上报） */
+export interface StageUpdate {
+  step: StageStep;
+  status: StageStatus;
+  detail?: string;
+}
+export type OnStage = (update: StageUpdate) => void;
 
 /** Worker 环境绑定（[vars] + secrets，全部可选——未配置时逐项降级） */
 export interface AppEnv {
