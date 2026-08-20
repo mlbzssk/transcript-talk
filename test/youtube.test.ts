@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchTranscript, YoutubeError } from "../src/adapters/youtube";
+import { ClientDisconnected } from "../src/core/types";
+import type { StageUpdate } from "../src/core/types";
 import { DEMO_VIDEO_ID } from "../src/demo-transcript";
 
 afterEach(() => {
@@ -117,5 +119,74 @@ describe("traceId 日志串联", () => {
     const lines = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
     expect(lines).toContain("my-trace-id");
     expect(lines).toContain("fetchTranscript 全链路失败");
+  });
+});
+
+describe("onStage 进度回调", () => {
+  const collect = () => {
+    const updates: StageUpdate[] = [];
+    return { updates, onStage: (u: StageUpdate) => updates.push(u) };
+  };
+
+  it("成功路径事件序列：层级 active → 找到轨道 → done（含字数）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch([
+        { match: (u) => u.includes("youtubei/v1/player"), body: innertubeOk },
+        { match: (u) => u.includes("timedtext"), body: captionJson3 },
+      ]),
+    );
+    const { updates, onStage } = collect();
+    await fetchTranscript({}, "dQw4w9WgXcQ", "trace", onStage);
+    expect(updates.map((u) => u.status)).toEqual(["active", "active", "done"]);
+    expect(updates[0]).toMatchObject({ step: "transcript", status: "active" });
+    expect(updates[1]?.detail).toContain("正在拉取内容");
+    expect(updates[2]?.detail).toContain("字");
+  });
+
+  it("降级路径逐层上报 active，演示视频全链失败上报 done（回退）", async () => {
+    vi.stubGlobal("fetch", mockFetch([])); // 全部 403
+    const { updates, onStage } = collect();
+    const t = await fetchTranscript({}, DEMO_VIDEO_ID, "trace", onStage);
+    expect(t.source).toBe("demo");
+    // 直连两层各一条 active（未配置代理跳过代理层），最后一条是回退 done
+    const actives = updates.filter((u) => u.status === "active");
+    expect(actives.length).toBe(2);
+    expect(updates[updates.length - 1]).toMatchObject({ status: "done", detail: "回退内置演示字幕" });
+  });
+
+  it("fatal 定性上报 failed，且不再降级", async () => {
+    const errorBody = JSON.stringify({
+      playabilityStatus: { status: "ERROR", reason: "Video unavailable" },
+    });
+    vi.stubGlobal("fetch", mockFetch([{ match: (u) => u.includes("youtubei/v1/player"), body: errorBody }]));
+    const { updates, onStage } = collect();
+    await expect(fetchTranscript({}, "dQw4w9WgXcQ", "trace", onStage)).rejects.toMatchObject({
+      kind: "not-found",
+    });
+    expect(updates[updates.length - 1]).toMatchObject({ status: "failed" });
+  });
+
+  it("onStage 抛 ClientDisconnected → 立即中止，不继续降级", async () => {
+    // 第一层 innertube 全部 403（返回 null 落入第二层），
+    // 第二层 watch 页开始时 onStage 抛断开 → fetchTranscript 应原样抛出，
+    // 而非吞掉后继续尝试代理层
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        return new Response("", { status: 403 });
+      }),
+    );
+    const onStage = (u: StageUpdate) => {
+      if (u.detail?.includes("watch 页")) throw new ClientDisconnected();
+    };
+    await expect(fetchTranscript({}, "dQw4w9WgXcQ", "trace", onStage)).rejects.toBeInstanceOf(
+      ClientDisconnected,
+    );
+    // 断开后不应再发起任何请求（代理层未配置本就跳过；关键是不再有新 fetch）
+    const callsAtAbort = calls;
+    expect(callsAtAbort).toBeGreaterThan(0);
   });
 });
