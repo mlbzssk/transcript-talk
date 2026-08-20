@@ -79,6 +79,43 @@
   .spinner.dark { border-color: var(--line); border-top-color: var(--accent); }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* ── 阶段进度 stepper ── */
+  .stepper {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px 20px 13px; margin-top: 18px; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  }
+  .steps { display: flex; align-items: center; gap: 10px; }
+  .step { display: flex; align-items: center; gap: 7px; color: var(--ink-3); font-size: 13.5px; white-space: nowrap; }
+  .step-bar { flex: 1; height: 2px; background: var(--line); border-radius: 1px; min-width: 12px; }
+  .step .dot {
+    width: 18px; height: 18px; border-radius: 50%; flex: none; position: relative;
+    border: 2px solid var(--line); background: var(--card); transition: all .2s;
+  }
+  .step.active { color: var(--ink); font-weight: 600; }
+  .step.active .dot { border-color: var(--accent); border-top-color: transparent; animation: spin .7s linear infinite; }
+  .step.done { color: var(--ink-2); }
+  .step.done .dot { border: none; background: #16a34a; }
+  .step.done .dot::after {
+    content: "✓"; position: absolute; inset: 0; color: #fff; font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step.failed { color: var(--danger); }
+  .step.failed .dot { border: none; background: var(--danger); }
+  .step.failed .dot::after {
+    content: "✕"; position: absolute; inset: 0; color: #fff; font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step.stopped .dot { border: none; background: var(--ink-3); }
+  .step-detail {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    margin-top: 11px; padding-top: 10px; border-top: 1px dashed var(--line);
+    font-size: 13px; color: var(--ink-2); min-height: 20px;
+  }
+  .step-detail .stage-text { flex: 1; }
+  .step-detail .stage-timer {
+    font-variant-numeric: tabular-nums; color: var(--ink-3); font-size: 12.5px; white-space: nowrap;
+  }
+
   /* ── 文章 ── */
   .meta-chip {
     display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 4px; font-size: 13px; color: var(--ink-2);
@@ -134,6 +171,9 @@
     .dialogue { flex-direction: column; gap: 2px; }
     .dialogue .speaker { text-align: left; min-width: 0; }
     .url-row { flex-direction: column; }
+    .steps { gap: 6px; }
+    .step { font-size: 12px; gap: 5px; }
+    .step .lbl { max-width: 3.5em; overflow: hidden; text-overflow: ellipsis; }
   }
 
   footer { text-align: center; color: var(--ink-3); font-size: 13px; margin-top: 56px; line-height: 1.9; }
@@ -164,6 +204,17 @@
     </div>
   </section>
 
+  <div id="stepper" class="stepper hidden">
+    <div class="steps">
+      <div class="step" data-step="transcript"><span class="dot"></span><span class="lbl">获取字幕</span></div>
+      <div class="step-bar"></div>
+      <div class="step" data-step="generate"><span class="dot"></span><span class="lbl">生成文章</span></div>
+      <div class="step-bar"></div>
+      <div class="step" data-step="finish"><span class="dot"></span><span class="lbl">完成</span></div>
+    </div>
+    <div class="step-detail"><span class="stage-text" id="stage-text"></span><span class="stage-timer" id="stage-timer"></span></div>
+  </div>
+
   <div id="status" class="status hidden"></div>
   <div id="meta" class="meta-chip hidden"></div>
   <article id="article"></article>
@@ -181,6 +232,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   url: $("url"), req: $("req"), go: $("go"), stop: $("stop"), demo: $("demo"),
   status: $("status"), meta: $("meta"), article: $("article"),
+  stepper: $("stepper"), stageText: $("stage-text"), stageTimer: $("stage-timer"),
 };
 
 const state = {
@@ -194,6 +246,111 @@ const state = {
   contentHost: null,   // 当前行落点容器
   summaries: new Map(),
 };
+
+/* ═══════════════ 模块：stepper（阶段进度） ═══════════════
+ * 对应后端 stage 事件：过程性信息走这里，一次性关键提示走 status 条（info） */
+const STAGE_STEPS = ["transcript", "generate", "finish"];
+const GENERATE_HINTS = ["Gemini 正在组织语言…", "正在梳理字幕要点…", "文章较长，正在奋力写作…"];
+const stage = {
+  active: null,        // 当前进行中的步（transcript | generate）
+  stepStart: 0,        // 当前步开始时间（秒表）
+  totalStart: 0,       // 全程起点（总耗时）
+  interval: null,
+  firstDelta: false,   // 生成阶段是否已有首字（决定轮播文案 vs 字数统计）
+  chars: 0,            // 已生成字数
+};
+
+const stepEl = (name) => els.stepper.querySelector('[data-step="' + name + '"]');
+const fmtDur = (ms) => {
+  const s = Math.floor(ms / 1000);
+  return s < 60 ? s + "s" : Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0") + "s";
+};
+const setStepState = (name, st) => { stepEl(name).className = "step " + st; };
+const setStageText = (t) => { els.stageText.textContent = t; };
+const setStageTimer = (t) => { els.stageTimer.textContent = t; };
+const chapterCount = () => state.sections.filter((s) => s.title).length;
+
+function stepperReset() {
+  els.stepper.classList.remove("hidden");
+  for (const s of STAGE_STEPS) setStepState(s, "pending");
+  setStageText("");
+  setStageTimer("");
+  stage.active = null;
+  stage.firstDelta = false;
+  stage.chars = 0;
+  stage.totalStart = Date.now();
+  clearInterval(stage.interval);
+  stage.interval = setInterval(stageTick, 500);
+}
+
+function stepperStopClock() {
+  clearInterval(stage.interval);
+  stage.interval = null;
+}
+
+function stageTick() {
+  if (!stage.active) return;
+  const elapsed = Date.now() - stage.stepStart;
+  setStageTimer(fmtDur(elapsed));
+  if (stage.active === "generate") {
+    if (stage.firstDelta) {
+      setStageText("已生成 " + stage.chars.toLocaleString() + " 字 · " + chapterCount() + " 章");
+    } else {
+      // 首字延迟轮播：每 10s 换一条，缓解等待焦虑
+      const idx = Math.min(Math.floor(elapsed / 10000), GENERATE_HINTS.length - 1);
+      setStageText(GENERATE_HINTS[idx]);
+    }
+  }
+}
+
+function handleStageEvent(ev) {
+  const name = ev.step;
+  if (ev.status === "active") {
+    setStepState(name, "active");
+    stage.active = name;
+    stage.stepStart = Date.now();
+    if (ev.detail) setStageText(ev.detail);
+    setStageTimer("0s");
+  } else if (ev.status === "done") {
+    setStepState(name, "done");
+    if (stage.active === name) {
+      setStageTimer(fmtDur(Date.now() - stage.stepStart));
+      stage.active = null;
+    }
+    if (ev.detail) setStageText(ev.detail);
+  } else if (ev.status === "failed") {
+    setStepState(name, "failed");
+    if (stage.active === name) {
+      setStageTimer(fmtDur(Date.now() - stage.stepStart));
+      stage.active = null;
+    }
+    if (ev.detail) setStageText(ev.detail);
+  }
+}
+
+/** 生成阶段产生首字后由 renderDelta 累计，供 stageTick 展示 */
+function countDelta(text) {
+  stage.chars += text.length;
+  stage.firstDelta = true;
+}
+
+/** 终态：完成（第 3 步打勾 + 总耗时） */
+function stepperFinish() {
+  stepperStopClock();
+  setStepState("finish", "done");
+  setStageText("完成 · 全程 " + fmtDur(Date.now() - stage.totalStart));
+  setStageTimer("");
+}
+
+/** 终态：失败/停止——当前 active 步定格（后台 stage failed 未覆盖到的兜底） */
+function stepperHalt(kind, message) {
+  stepperStopClock();
+  const target = stage.active || (stepEl("transcript").classList.contains("active") ? "transcript" : "generate");
+  setStepState(target, kind === "stopped" ? "stopped" : "failed");
+  setStageText(message || (kind === "stopped" ? "已停止" : "生成失败"));
+  if (stage.stepStart) setStageTimer(fmtDur(Date.now() - stage.stepStart));
+  stage.active = null;
+}
 
 /* ═══════════════ 模块：api（对后端的全部认知） ═══════════════
  * 独立部署逃生舱：改为完整 API 地址即可，如 "https://api.example.workers.dev" */
@@ -297,6 +454,7 @@ function makeSection(title) {
 
 function renderDelta(text) {
   state.buffer += text;
+  countDelta(text);
   // 只处理完整行；未完成行作为 pending 展示（规避半截 Markdown 语法）
   let nl;
   while ((nl = state.buffer.indexOf("\n")) !== -1) {
@@ -446,6 +604,7 @@ async function generate() {
 
   els.status.classList.add("hidden");
   resetArticle();
+  stepperReset();
   setGenerating(true);
   state.abort = new AbortController();
 
@@ -462,25 +621,32 @@ async function generate() {
           s.textContent = c;
           els.meta.appendChild(s);
         }
+      } else if (ev.type === "stage") {
+        handleStageEvent(ev);
       } else if (ev.type === "info") {
         showStatus(ev.message, "info");
       } else if (ev.type === "delta") {
         renderDelta(ev.text);
         autoScroll();
       } else if (ev.type === "done") {
+        stepperFinish();
         finishArticle(ev.finishReason);
       } else if (ev.type === "error") {
+        if (stage.active) stepperHalt("failed");
         showStatus(ev.message, "error");
       }
     }, state.abort.signal);
   } catch (e) {
     if (e.name === "AbortError") {
+      stepperHalt("stopped", "已停止 · 用时 " + fmtDur(Date.now() - stage.totalStart));
       showStatus("已停止生成", "info");
     } else {
+      stepperHalt("failed");
       showStatus(e.message || "网络错误", "error");
     }
   } finally {
     setGenerating(false);
+    stepperStopClock();
     flushPending();
     autoScroll();
   }

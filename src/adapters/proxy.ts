@@ -1,4 +1,5 @@
 import { connect } from "cloudflare:sockets";
+import { logger } from "../core/logger";
 
 /**
  * webshare.io HTTP 代理适配器。
@@ -56,6 +57,8 @@ export async function proxyFetch(env: ProxyEnv, req: ProxyRequest): Promise<Prox
     const replyHead = (await reader.readUntil("\r\n\r\n")) ?? "";
     const statusLine = replyHead.split("\r\n")[0] ?? "";
     if (!/HTTP\/1\.[01]\s+200/.test(statusLine)) {
+      // 只记录状态行（不含 Proxy-Authorization 凭据）
+      logger.warn("代理 CONNECT 握手失败", { host: u.hostname, statusLine: statusLine.slice(0, 80) });
       throw new Error(`代理握手失败: ${statusLine.slice(0, 80)}`);
     }
     reader.release();

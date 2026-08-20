@@ -13,6 +13,8 @@ import { jsonResponse, sseEncode, sseFromEvents, sseHeaders } from "./http";
  * POST /api/generate  { url, request? } → SSE 流
  *
  * 双跳管线：Gemini SSE → 解析 text delta → 重新编码为自有事件协议转发前端。
+ * 控制流：参数校验后立即返回 SSE 响应，字幕抓取与生成都发生在后台泵里——
+ * 这样 stage 进度事件从字幕抓取的第一层就能推到浏览器（而非等抓取完成才建立连接）。
  * 演示模式（未配置 GEMINI_API_KEY）：假流逐字下发预生成文章，前端可独立验收。
  */
 export async function handleGenerate(request: Request, env: AppEnv): Promise<Response> {
@@ -49,47 +51,67 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
     ]);
   }
 
-  // ── 第一步：字幕（降级链见 adapters/youtube.ts）──
-  let transcript: Transcript;
-  if (demoMode) {
-    transcript = DEMO_TRANSCRIPT;
-  } else {
-    try {
-      transcript = await fetchTranscript(env, videoId, sessionId);
-      logger.info("字幕获取成功", {
-        sessionId,
-        videoId,
-        source: transcript.source,
-        languageCode: transcript.languageCode,
-        chars: transcript.text.length,
-      });
-    } catch (e) {
-      const message = e instanceof YoutubeError ? e.message : "字幕获取失败，请稍后重试";
-      logger.error("字幕获取失败", {
-        sessionId,
-        videoId,
-        kind: e instanceof YoutubeError ? e.kind : "unknown",
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return sseFromEvents([{ type: "error", message }]);
-    }
-  }
-
-  // ── 第二步：流式生成（pump 模式，客户端断开时 abort 上游）──
+  // ── 立即建立 SSE 通道，全部后续步骤在后台泵中执行 ──
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
-  const write = (ev: SseEvent) => writer.write(sseEncode(ev));
+  // write 抛错统一标记为客户端断开（用户停止/网络中断），
+  // 与真实业务异常区分开——排障时不把主动停止误判为故障
+  const write = (ev: SseEvent): Promise<void> =>
+    writer.write(sseEncode(ev)).catch(() => {
+      throw new ClientDisconnected();
+    });
   const ac = new AbortController();
 
   void (async () => {
     let article = "";
     const startedAt = Date.now();
+    // 与入口 access log 同源（cf-ray），本地 dev 无此头时记 local——
+    // 按 requestId 聚合 HTTP 层、按 sessionId 聚合业务层，两者由此对齐
+    const requestId = request.headers.get("cf-ray") ?? "local";
+    logger.info("generate 开始", {
+      requestId,
+      sessionId,
+      videoId: demoMode ? DEMO_VIDEO_ID : videoId,
+      demoMode,
+      userRequestChars: userRequest.length,
+    });
     try {
-      logger.info("generate 开始流式生成", {
-        sessionId,
-        videoId: demoMode ? DEMO_VIDEO_ID : videoId,
-        demoMode,
-      });
+      // ── 第一步：字幕（降级链见 adapters/youtube.ts，进度经 stage 事件逐层透出）──
+      let transcript: Transcript;
+      if (demoMode) {
+        await write({ type: "stage", step: "transcript", status: "active", detail: "演示模式：使用内置字幕" });
+        transcript = DEMO_TRANSCRIPT;
+        await write({
+          type: "stage",
+          step: "transcript",
+          status: "done",
+          detail: `${DEMO_TRANSCRIPT.text.length.toLocaleString()} 字`,
+        });
+      } else {
+        try {
+          transcript = await fetchTranscript(env, videoId, sessionId, (u) =>
+            write({ type: "stage", ...u }),
+          );
+          logger.info("字幕获取成功", {
+            sessionId,
+            videoId,
+            source: transcript.source,
+            languageCode: transcript.languageCode,
+            chars: transcript.text.length,
+          });
+        } catch (e) {
+          const message = e instanceof YoutubeError ? e.message : "字幕获取失败，请稍后重试";
+          logger.error("字幕获取失败", {
+            sessionId,
+            videoId,
+            kind: e instanceof YoutubeError ? e.kind : "unknown",
+            error: e instanceof Error ? e.message : String(e),
+          });
+          await write({ type: "error", message });
+          return;
+        }
+      }
+
       await write({
         type: "session",
         id: sessionId,
@@ -98,6 +120,8 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
         demoMode,
       });
 
+      // ── 第二步：流式生成（stage 先行，首字后由前端统计字数/章节）──
+      await write({ type: "stage", step: "generate", status: "active", detail: "Gemini 正在组织语言…" });
       let finishReason = "STOP";
       if (demoMode) {
         await write({ type: "info", message: "未配置 GEMINI_API_KEY——演示模式：播放预生成文章（章节 5W1H 仅有内置示例）" });
@@ -137,8 +161,15 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
         createdAt: Date.now(),
         demo: demoMode,
       });
+      await write({
+        type: "stage",
+        step: "generate",
+        status: "done",
+        detail: `${article.length.toLocaleString()} 字`,
+      });
       await write({ type: "done", finishReason });
       logger.info("generate 完成", {
+        requestId,
         sessionId,
         videoId: demoMode ? DEMO_VIDEO_ID : videoId,
         finishReason,
@@ -147,8 +178,20 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
       });
     } catch (e) {
       ac.abort(); // 释放上游 Gemini 流，不浪费配额
+      if (e instanceof ClientDisconnected) {
+        // 用户停止或网络中断：非故障，warn 级别（article 长度可判断中断位置）
+        logger.warn("generate 客户端断开", {
+          requestId,
+          sessionId,
+          videoId: demoMode ? DEMO_VIDEO_ID : videoId,
+          articleChars: article.length,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return;
+      }
       const message = e instanceof GeminiError ? e.message : "生成中断，请重试";
       logger.error("generate 流式生成中断", {
+        requestId,
         sessionId,
         videoId: demoMode ? DEMO_VIDEO_ID : videoId,
         error: e instanceof Error ? e.message : String(e),
@@ -172,6 +215,13 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
 
 function* chunkText(s: string, size: number): Generator<string> {
   for (let i = 0; i < s.length; i += size) yield s.slice(i, i + size);
+}
+
+/** 客户端断开（用户停止/网络中断）——非故障，日志单独定性 */
+class ClientDisconnected extends Error {
+  constructor() {
+    super("client disconnected");
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

@@ -24,23 +24,32 @@ export default {
     // cf-ray 是 Cloudflare 每请求唯一标识（本地 dev 无此头时自动生成兜底），
     // 用于入口层日志定位具体 HTTP 请求；业务链路串联见 sessionId/traceId
     const requestId = request.headers.get("cf-ray") ?? crypto.randomUUID();
+    const isHealth = pathname === "/api/health";
+    // access log：health 探活用 debug（避免部署后探活刷屏），业务端点用 info
+    const log = isHealth ? logger.debug : logger.info;
+    log("http 请求进入", { requestId, method: request.method, pathname });
+    const startedAt = Date.now();
     try {
+      let res: Response;
       if (pathname === "/api/generate" && request.method === "POST") {
-        return await handleGenerate(request, env);
-      }
-      if (pathname === "/api/summarize" && request.method === "POST") {
-        return await handleSummarize(request, env);
-      }
-      if (pathname === "/api/health" && request.method === "GET") {
-        return jsonResponse({
+        res = await handleGenerate(request, env);
+      } else if (pathname === "/api/summarize" && request.method === "POST") {
+        res = await handleSummarize(request, env);
+      } else if (isHealth && request.method === "GET") {
+        res = jsonResponse({
           ok: true,
           gemini: geminiConfigured(env),
           proxy: proxyConfigured(env),
           kv: !!env.SESSIONS,
         });
+      } else {
+        logger.warn("未匹配的路由", { requestId, method: request.method, pathname });
+        res = jsonResponse({ error: "Not Found" }, 404);
       }
-      logger.warn("未匹配的路由", { requestId, method: request.method, pathname });
-      return jsonResponse({ error: "Not Found" }, 404);
+      // 注：generate 的 SSE 响应此处 status=200、耗时≈建立连接耗时；
+      // 完整生成时长看业务日志"generate 完成"的 elapsedMs
+      log("http 响应", { requestId, method: request.method, status: res.status, elapsedMs: Date.now() - startedAt });
+      return res;
     } catch (e) {
       logger.error("请求处理异常", {
         requestId,
