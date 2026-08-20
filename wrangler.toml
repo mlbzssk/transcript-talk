@@ -7,6 +7,11 @@ compatibility_flags = ["nodejs_compat"]
 [assets]
 directory = "./public"
 
+# 生产日志（Workers Logs）：dashboard 可查、可按 level/字段过滤，
+# 与本地 wrangler dev 终端日志同构（结构化 JSON）
+[observability]
+enabled = true
+
 # 会话上下文存储：Cloudflare KV（内存优先 + KV 兜底；无需 Redis）
 [[kv_namespaces]]
 binding = "SESSIONS"

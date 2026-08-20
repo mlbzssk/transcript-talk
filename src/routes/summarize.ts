@@ -27,6 +27,10 @@ export async function handleSummarize(request: Request, env: AppEnv): Promise<Re
     return jsonResponse({ error: "缺少 sessionId 或 sectionTitle" }, 400);
   }
 
+  const startedAt = Date.now();
+  // 与 generate 开始日志同源（cf-ray），HTTP 层与业务层由此对齐；本地 dev 记 local
+  const requestId = request.headers.get("cf-ray") ?? "local";
+
   const ctx = await loadSession(env, sessionId);
   if (!ctx) {
     logger.warn("summarize 会话不存在或已过期", { sessionId });
@@ -42,6 +46,7 @@ export async function handleSummarize(request: Request, env: AppEnv): Promise<Re
   // 演示模式：仅内置示例章节，其余明确告知限制（不静默造假）
   if (ctx.demo || !geminiConfigured(env)) {
     const seed = DEMO_SUMMARIES[section.title];
+    logger.debug("summarize 演示模式分支", { sessionId, sectionTitle, hit: !!seed });
     if (seed) return jsonResponse({ summary: seed, demo: true });
     return jsonResponse(
       {
@@ -67,17 +72,21 @@ export async function handleSummarize(request: Request, env: AppEnv): Promise<Re
   try {
     const summary = await generateJson(env, system, user);
     logger.info("summarize 生成成功", {
+      requestId,
       sessionId,
       sectionTitle: section.title,
       summaryChars: JSON.stringify(summary).length,
+      elapsedMs: Date.now() - startedAt,
     });
     return jsonResponse({ summary });
   } catch (e) {
     const message = e instanceof GeminiError ? e.message : "总结生成失败，请重试";
     const status = e instanceof GeminiError ? e.status : 500;
     logger.error("summarize 生成失败", {
+      requestId,
       sessionId,
       sectionTitle: section.title,
+      elapsedMs: Date.now() - startedAt,
       error: e instanceof Error ? e.message : String(e),
     });
     return jsonResponse({ error: message }, status < 400 ? 500 : status);

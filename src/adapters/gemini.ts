@@ -153,6 +153,11 @@ export async function generateJson(
     return await call();
   } catch (e) {
     if (e instanceof GeminiError) throw e; // 限流/鉴权类错误不重试
+    // 解析类失败（非法 JSON/字段缺失）：重试可见，排障能看到首次失败原因
+    logger.warn("Gemini 结构化响应不合法，自动重试一次", {
+      model,
+      error: e instanceof Error ? e.message : String(e),
+    });
     return await call(); // JSON 偶发不合法，重试一次
   }
 }
