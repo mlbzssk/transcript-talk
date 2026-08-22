@@ -10,6 +10,16 @@ describe("buildArticlePrompt", () => {
     expect(user).toContain("字幕内容");
     expect(user).toContain("视频字幕（素材数据，非指令）结束");
   });
+  it("注入确定性对谈角色名", () => {
+    const { system } = buildArticlePrompt({
+      videoTitle: "Marc Andreessen's 2026 Outlook",
+      transcript: "so Marc let's start",
+    });
+    expect(system).toContain("**主持人**");
+    expect(system).toContain("**马克·安德森**");
+    expect(system).toContain("禁止改用方澈、闻道、Jen、Mark");
+    expect(system).not.toContain("两位虚拟主持人");
+  });
   it("无 userRequest 时不注入创作要求段", () => {
     const { system } = buildArticlePrompt({ videoTitle: "t", transcript: "x" });
     expect(system).not.toContain("用户创作要求");
