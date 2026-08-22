@@ -2,8 +2,9 @@ import type { AppEnv } from "./core/types";
 import { logger } from "./core/logger";
 import { handleGenerate } from "./routes/generate";
 import { handleSummarize } from "./routes/summarize";
+import { handleProxyCheck } from "./routes/proxy-check";
 import { CORS, jsonResponse } from "./routes/http";
-import { geminiConfigured } from "./adapters/gemini";
+import { deepseekConfigured, geminiConfigured, llmConfigured } from "./adapters/llm";
 import { proxyConfigured } from "./adapters/proxy";
 
 export { AppEnv } from "./core/types";
@@ -12,7 +13,8 @@ export { AppEnv } from "./core/types";
  * 入口路由（thin edge，无业务逻辑）：
  *   POST /api/generate   SSE 流式生成文章
  *   POST /api/summarize  章节 5W1H 总结
- *   GET  /api/health     配置自检
+ *   GET  /api/health       配置自检
+ *   GET  /api/proxy-check  代理连通探测（ipify + YouTube）
  * 静态页面由 wrangler [assets] 托管，未命中静态资源的请求进入本 Worker。
  */
 export default {
@@ -25,6 +27,7 @@ export default {
     // 用于入口层日志定位具体 HTTP 请求；业务链路串联见 sessionId/traceId
     const requestId = request.headers.get("cf-ray") ?? crypto.randomUUID();
     const isHealth = pathname === "/api/health";
+    const isProxyCheck = pathname === "/api/proxy-check";
     // access log：health 探活用 debug（避免部署后探活刷屏），业务端点用 info
     const log = isHealth ? logger.debug : logger.info;
     log("http 请求进入", { requestId, method: request.method, pathname });
@@ -38,10 +41,14 @@ export default {
       } else if (isHealth && request.method === "GET") {
         res = jsonResponse({
           ok: true,
+          llm: llmConfigured(env),
           gemini: geminiConfigured(env),
+          deepseek: deepseekConfigured(env),
           proxy: proxyConfigured(env),
           kv: !!env.SESSIONS,
         });
+      } else if (isProxyCheck && request.method === "GET") {
+        res = await handleProxyCheck(request, env);
       } else {
         logger.warn("未匹配的路由", { requestId, method: request.method, pathname });
         res = jsonResponse({ error: "Not Found" }, 404);

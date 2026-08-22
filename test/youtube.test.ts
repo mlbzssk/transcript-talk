@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchTranscript, YoutubeError } from "../src/adapters/youtube";
 import { ClientDisconnected } from "../src/core/types";
 import type { StageUpdate } from "../src/core/types";
-import { DEMO_VIDEO_ID } from "../src/demo-transcript";
+import { DEMO_VIDEO_ID, ELON_TED_2022_VIDEO_ID, ELON_TED_VIDEO_ID } from "../src/demo-transcript";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -97,6 +97,22 @@ describe("fetchTranscript 降级链", () => {
     const t = await fetchTranscript({}, DEMO_VIDEO_ID);
     expect(t.source).toBe("demo");
     expect(t.text.length).toBeGreaterThan(0);
+  });
+
+  it("全链路失败但请求的是 TED 2017 演示视频 → 回退硬编码字幕", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    const t = await fetchTranscript({}, ELON_TED_VIDEO_ID);
+    expect(t.source).toBe("demo");
+    expect(t.text).toContain("Why are you boring");
+    expect(t.text.length).toBeGreaterThan(10000);
+  });
+
+  it("全链路失败但请求的是 TED 2022 演示视频 → 回退硬编码字幕", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    const t = await fetchTranscript({}, ELON_TED_2022_VIDEO_ID);
+    expect(t.source).toBe("demo");
+    expect(t.text).toContain("Why make that offer");
+    expect(t.text.length).toBeGreaterThan(10000);
   });
 
   it("失败是 YoutubeError 实例（调用方可按类型识别）", async () => {

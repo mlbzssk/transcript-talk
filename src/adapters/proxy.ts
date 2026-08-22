@@ -4,9 +4,11 @@ import { logger } from "../core/logger";
 /**
  * webshare.io HTTP 代理适配器。
  *
- * Cloudflare Worker 的 fetch 不支持配置代理，因此通过 TCP Socket 手工实现：
- *   TCP 连到代理 → 发 CONNECT 建立隧道 → startTls() 升级 TLS
- *   → 在 TLS 流上手工写 HTTP/1.1 请求 → 手工解析响应（含 chunked 编码）
+ * Cloudflare Worker 的 fetch 不支持配置代理，因此通过 TCP Socket 手工实现。
+ *
+ * 采用「绝对 URL」模式（GET https://host/path HTTP/1.1），由代理端发起与目标的 HTTPS，
+ * Worker 侧仅明文 HTTP 对话代理——避免 CONNECT 隧道内 startTls() 在 CF 生产环境
+ * （尤其 PROXY_HOST 为 IP 时 expectedServerHostname 不生效）导致 TLS Handshake Failed。
  */
 export interface ProxyEnv {
   PROXY_HOST?: string;
@@ -41,49 +43,28 @@ export async function proxyFetch(env: ProxyEnv, req: ProxyRequest): Promise<Prox
 
   const socket = connect(
     { hostname: env.PROXY_HOST!, port: Number(env.PROXY_PORT!) },
-    { secureTransport: "starttls", allowHalfOpen: false },
+    { allowHalfOpen: false },
   );
   const timer = setTimeout(() => socket.close(), timeoutMs);
   try {
-    // 1. CONNECT 隧道（webshare 端口 80 为明文 HTTP 代理）
     const auth = btoa(`${env.PROXY_USERNAME}:${env.PROXY_PASSWORD}`);
-    await writeAll(
-      socket,
-      `CONNECT ${u.hostname}:443 HTTP/1.1\r\n` +
-        `Host: ${u.hostname}:443\r\n` +
-        `Proxy-Authorization: Basic ${auth}\r\n\r\n`,
-    );
-    const reader = new ByteReader(socket);
-    const replyHead = (await reader.readUntil("\r\n\r\n")) ?? "";
-    const statusLine = replyHead.split("\r\n")[0] ?? "";
-    if (!/HTTP\/1\.[01]\s+200/.test(statusLine)) {
-      // 只记录状态行（不含 Proxy-Authorization 凭据）
-      logger.warn("代理 CONNECT 握手失败", { host: u.hostname, statusLine: statusLine.slice(0, 80) });
-      throw new Error(`代理握手失败: ${statusLine.slice(0, 80)}`);
-    }
-    reader.release();
-
-    // 2. 隧道内 TLS 升级
-    const tls = socket.startTls({ expectedServerHostname: u.hostname });
-
-    // 3. 手写 HTTP/1.1 请求（fetch 无法接管 socket）
     const headers: Record<string, string> = {
       Host: u.hostname,
-      Connection: "close", // 读完即 EOF，简化响应边界判断
+      Connection: "close",
+      "Proxy-Authorization": `Basic ${auth}`,
       ...(req.body ? { "Content-Length": String(req.body.length) } : {}),
       ...req.headers,
     };
+    // 绝对 URL：代理代为 HTTPS，Worker 不再 CONNECT + startTls
     const raw =
-      `${method} ${u.pathname}${u.search} HTTP/1.1\r\n` +
+      `${method} ${u.href} HTTP/1.1\r\n` +
       Object.entries(headers)
         .map(([k, v]) => `${k}: ${v}`)
         .join("\r\n") +
       "\r\n\r\n" +
       (req.body ?? "");
-    await writeAll(tls, raw);
-
-    // 4. 读完整响应并解析
-    const all = await new ByteReader(tls).readAll();
+    await writeAll(socket, raw);
+    const all = await new ByteReader(socket).readAll();
     return await parseHttpResponse(all);
   } finally {
     clearTimeout(timer);
@@ -162,10 +143,14 @@ async function parseHttpResponse(all: Uint8Array): Promise<ProxyResponse> {
   const sep = findSub(all, new TextEncoder().encode("\r\n\r\n"));
   if (sep === -1) throw new Error("代理响应格式异常（无 header 边界）");
   const head = new TextDecoder().decode(all.slice(0, sep));
-  const status = Number((head.split(" ")[1] ?? "0"));
+  const statusLine = head.split("\r\n")[0] ?? "";
+  const status = Number(statusLine.split(" ")[1] ?? "0");
+  if (status === 0) {
+    logger.warn("代理响应无法解析状态行", { statusLine: statusLine.slice(0, 120) });
+  }
   let body: Uint8Array = all.slice(sep + 4);
   if (/transfer-encoding:\s*chunked/i.test(head)) body = dechunk(body);
-  if (body[0] === 0x1f && body[1] === 0x8b) body = await gunzip(body); // 保险：未带 Accept-Encoding 仍可能收到 gzip
+  if (body[0] === 0x1f && body[1] === 0x8b) body = await gunzip(body);
   return { status, bodyText: new TextDecoder().decode(body) };
 }
 

@@ -1,4 +1,4 @@
-import { DEMO_TRANSCRIPT, DEMO_VIDEO_ID } from "../demo-transcript";
+import { getDemoEntry } from "../demo-transcript";
 import { logger } from "../core/logger";
 import {
   extractPlayerFromHtml,
@@ -132,11 +132,12 @@ export async function fetchTranscript(
     }
   }
 
-  // 全链路失败：演示视频回退硬编码字幕，其余给出明确错误
-  if (videoId === DEMO_VIDEO_ID) {
+  // 全链路失败：内置演示视频回退硬编码字幕，其余给出明确错误
+  const demoEntry = getDemoEntry(videoId);
+  if (demoEntry) {
     logger.warn("fetchTranscript 全链路失败，回退演示字幕", { traceId, videoId });
     onStage?.({ step: "transcript", status: "done", detail: "回退内置演示字幕" });
-    return DEMO_TRANSCRIPT;
+    return demoEntry.transcript;
   }
   logger.error("fetchTranscript 全链路失败", { traceId, videoId, hadPlayer: !!lastPlayer });
   const failMessage = lastPlayer

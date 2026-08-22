@@ -184,7 +184,7 @@
 <div class="wrap">
   <header class="hero">
     <h1>Transcript Talk</h1>
-    <p>输入一个有字幕的 YouTube 视频，Gemini 将其转写为一篇章节化的中文对谈文章，并为每章生成 5W1H 总结。</p>
+    <p>输入一个有字幕的 YouTube 视频，大模型将其转写为一篇章节化的中文对谈文章，并为每章生成 5W1H 总结。</p>
   </header>
 
   <section class="input-card">
@@ -200,7 +200,9 @@
     </details>
     <div class="quick-row">
       一键体验：
-      <button class="btn-ghost" id="demo">载入演示视频（a16z: Marc Andreessen's 2026 Outlook）</button>
+      <button class="btn-ghost" id="demo-a16z">a16z: Marc Andreessen's 2026 Outlook</button>
+      <button class="btn-ghost" id="demo-ted">TED 2017: Elon Musk — The future we're building</button>
+      <button class="btn-ghost" id="demo-ted2022">TED 2022: Elon Musk — Twitter, Tesla & his brain</button>
     </div>
   </section>
 
@@ -220,7 +222,7 @@
   <article id="article"></article>
 
   <footer>
-    基于 Cloudflare Worker + Gemini · 流式生成 · 章节级 5W1H<br>
+    基于 Cloudflare Worker · Gemini / DeepSeek · 流式生成 · 章节级 5W1H<br>
     服务端保存会话上下文，总结请求不回传文章内容
   </footer>
 </div>
@@ -230,7 +232,8 @@
 /* ═══════════════ 模块：状态 ═══════════════ */
 const $ = (id) => document.getElementById(id);
 const els = {
-  url: $("url"), req: $("req"), go: $("go"), stop: $("stop"), demo: $("demo"),
+  url: $("url"), req: $("req"), go: $("go"), stop: $("stop"),
+  demoA16z: $("demo-a16z"), demoTed: $("demo-ted"), demoTed2022: $("demo-ted2022"),
   status: $("status"), meta: $("meta"), article: $("article"),
   stepper: $("stepper"), stageText: $("stage-text"), stageTimer: $("stage-timer"),
 };
@@ -250,7 +253,8 @@ const state = {
 /* ═══════════════ 模块：stepper（阶段进度） ═══════════════
  * 对应后端 stage 事件：过程性信息走这里，一次性关键提示走 status 条（info） */
 const STAGE_STEPS = ["transcript", "generate", "finish"];
-const GENERATE_HINTS = ["Gemini 正在组织语言…", "正在梳理字幕要点…", "文章较长，正在奋力写作…"];
+/* 统一文案：生成阶段可能 Gemini→DeepSeek 回退，轮播时尚未确定最终模型 */
+const GENERATE_HINTS = ["正在组织语言…", "正在梳理字幕要点…", "文章较长，正在奋力写作…"];
 const stage = {
   active: null,        // 当前进行中的步（transcript | generate）
   stepStart: 0,        // 当前步开始时间（秒表）
@@ -654,11 +658,17 @@ async function generate() {
 
 els.go.addEventListener("click", generate);
 els.stop.addEventListener("click", () => state.abort && state.abort.abort());
-els.demo.addEventListener("click", () => {
-  els.url.value = "https://www.youtube.com/watch?v=xRh2sVcNXQ8";
+function loadDemo(url, label) {
+  els.url.value = url;
   els.url.focus();
-  showStatus("已载入演示视频链接，点击「生成文章」开始。若 YouTube 风控导致字幕抓取失败，将自动回退内置演示字幕。", "info");
-});
+  showStatus("已载入「" + label + "」。点击「生成文章」开始。若 YouTube 风控导致字幕抓取失败，将自动回退内置演示字幕。", "info");
+}
+els.demoA16z.addEventListener("click", () =>
+  loadDemo("https://www.youtube.com/watch?v=xRh2sVcNXQ8", "a16z: Marc Andreessen's 2026 Outlook"));
+els.demoTed.addEventListener("click", () =>
+  loadDemo("https://www.youtube.com/watch?v=zIwLWfaAg-8", "TED 2017: Elon Musk — The future we're building"));
+els.demoTed2022.addEventListener("click", () =>
+  loadDemo("https://www.youtube.com/watch?v=cdZZpaB2kDM", "TED 2022: Elon Musk — Twitter, Tesla & his brain"));
 els.url.addEventListener("keydown", (e) => { if (e.key === "Enter" && !state.generating) generate(); });
 
 resetArticle();

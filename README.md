@@ -46,7 +46,7 @@
 - **轨道选择**：`pickTrack()` 优先中文（zh*）→ 英文 → 首轨
 - **解析**：`parseJson3()` 拼接 `events[].segs[].utf8`、过滤空段、行间换行
 - **统一截断**：`truncateTranscript()` 15 万字符上限，generate 与 summarize **共用同一函数**保证两阶段上下文一致
-- **演示视频自动回退**：仅 `DEMO_VIDEO_ID === xRh2sVcNXQ8`；其他视频失败 UI 提示「YouTube 对当前出口 IP 触发了风控，可配置代理或用演示视频体验」
+- **演示视频自动回退**：内置 `xRh2sVcNXQ8`（a16z）、`zIwLWfaAg-8`（TED 2017: Elon Musk）、`cdZZpaB2kDM`（TED 2022: Elon Musk）；其他视频失败 UI 提示「YouTube 对当前出口 IP 触发了风控，可配置代理或用演示视频体验」
 - **双格式兼容**：`extractPlayerFromHtml()` 对明文 JSON 直接 `JSON.parse`，对转义字符串形式 `JSON.parse(JSON.parse('"…"'))` 双重解包
 
 ### webshare 代理：TCP Socket 隧道手写实现
@@ -56,16 +56,10 @@
 `src/adapters/proxy.ts` 的 `proxyFetch()` 完整流程：
 
 ```
-1. connect({ hostname: PROXY_HOST, port: PROXY_PORT }, { secureTransport: "starttls" })
-2. socket.writable.getWriter().write(encode(
-     `CONNECT youtube.com:443 HTTP/1.1\r\n
-      Proxy-Authorization: Basic ${btoa('user:pass')}\r\n\r\n`))
-3. 读 socket.readable，验证 "200 Connection established"
-4. socket.startTls({ expectedServerHostname: "youtube.com" })  ← TLS 升级
-5. 释放 reader，tls 同样 writable.write(GET /... HTTP/1.1 ...) 手写请求
-6. tls.readable 读完整响应（Connection: close → EOF）
-7. bytes 层解 chunked + DecompressionStream gunzip
-8. 解析 head/body，返回 { status, bodyText }
+1. connect({ hostname: PROXY_HOST, port: PROXY_PORT })  ← 明文 TCP 连代理
+2. 发送绝对 URL 请求：GET https://youtube.com/... HTTP/1.1 + Proxy-Authorization
+   （由代理端代为 HTTPS，Worker 侧不做 CONNECT + startTls——规避 CF 生产环境隧道 TLS 限制）
+3. 读 socket.readable 至 EOF，解析 HTTP/1.1 响应（含 chunked / gzip）
 ```
 
 ---
@@ -231,6 +225,9 @@ npx wrangler login                                    # 首次需要 Cloudflare 
 npx wrangler secret put GEMINI_API_KEY                # 从 https://aistudio.google.com/apikey 获取
 # 可选：若默认模型 gemini-2.5-flash 返回 404（模型已下线/Key 无权限），显式指定可用模型
 # npx wrangler secret put GEMINI_MODEL                  # 如 gemini-3-flash 等，以 aistudio 模型页为准
+# 可选：DeepSeek 回退（Gemini 未配或 401/403 时启用）—— https://platform.deepseek.com/api_keys
+npx wrangler secret put DEEPSEEK_API_KEY
+# npx wrangler secret put DEEPSEEK_MODEL                # 默认 deepseek-v4-flash
 # 可选：webshare 代理
 npx wrangler secret put PROXY_HOST
 npx wrangler secret put PROXY_PORT
@@ -311,8 +308,30 @@ id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 ### GET /api/health
 ```json
-{ "ok": true, "gemini": true, "proxy": false, "kv": false }
+{ "ok": true, "llm": true, "gemini": false, "deepseek": true, "proxy": true, "kv": false }
 ```
+
+### GET /api/proxy-check
+
+Worker 侧探测 webshare 代理（无需 curl）。浏览器打开：
+
+`https://<你的域名>/api/proxy-check`
+
+```json
+{
+  "configured": true,
+  "ok": true,
+  "host": "1.2.3.4",
+  "port": "8168",
+  "ipify": { "ok": true, "status": 200, "exitIp": "1.2.3.4", "elapsedMs": 1200 },
+  "youtube": { "ok": false, "playability": "LOGIN_REQUIRED", "reason": "Sign in to confirm…", "elapsedMs": 800 },
+  "message": "代理已连通（出口 1.2.3.4），但 YouTube 仍拒绝：LOGIN_REQUIRED。请换 Proxy List 中其他国家 IP，或使用演示视频"
+}
+```
+
+- `ok: true` 且 `ipify.ok` → 代理隧道连通（CONNECT/认证/TLS 正常）
+- `youtube.ok: false` → 代理通了但 IP 被 YouTube 风控，换 Proxy List 里的 IP
+- `ok: false` → 检查 secret 是否填的是 **Proxy List 的 IP:Port**（免费套餐不能用 `p.webshare.io:80`）
 
 ---
 
@@ -334,7 +353,10 @@ id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 **结论**：2025-2026 年 YouTube 对无登录态会话全面启用 PO Token 风控，包括数据中心 IP、无 cookie fetch 与 headless 浏览器。**这就是题目设置「webshare 代理 + 硬编码字幕」双保险的原因**。
 
 - 在生产环境配置 webshare 代理可显著提升 `Innertube → watch 页` 成功率（10 个免费代理足够轮换）
-- 演示视频（`xRh2sVcNXQ8`）的字幕硬编码兜底：基于视频真实主题人工整理，标注来源
+- 演示视频字幕硬编码兜底（基于视频真实主题人工整理，标注来源）：
+  - `xRh2sVcNXQ8` — a16z Marc Andreessen 2026 Outlook（含预生成文章 + 5W1H 示例，无 Key 可完整演示）
+  - `zIwLWfaAg-8` — [TED 2017: Elon Musk — The future we're building](https://www.youtube.com/watch?v=zIwLWfaAg-8)（含完整字幕；需配置 LLM Key 生成文章）
+  - `cdZZpaB2kDM` — [TED 2022: Elon Musk — Twitter, Tesla & his brain](https://www.youtube.com/watch?v=cdZZpaB2kDM)（含完整字幕；需配置 LLM Key 生成文章）
 - 其他视频若全链路失败，UI 明确告知原因并建议「配置代理或用演示视频」
 
 ---
@@ -363,7 +385,8 @@ transcript-talk/
 │   │   ├── markdown.ts        章节切分（generate/summarize 共用的单一事实来源）
 │   │   ├── prompts.ts         三层提示词工厂 + 注入防护
 │   │   └── logger.ts          结构化 JSON 日志
-│   └── demo-transcript.ts   演示数据（兜底字幕 + 预生成文章 + 5W1H 示例）
+│   ├── demo/                多视频演示目录（a16z + TED Elon Musk 2017/2022）
+│   └── demo-transcript.ts   向后兼容 re-export
 ├── test/                    vitest 单测（9 文件 55 用例：core 纯逻辑 + adapters mock）
 ├── wrangler.toml            assets + 兼容性 + 可选 vars/kv
 ├── eslint.config.mjs        ESLint flat config（JS + TS 推荐规则）
