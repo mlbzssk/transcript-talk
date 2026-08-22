@@ -3,20 +3,21 @@ import { logger } from "../core/logger";
 import { extractVideoId, truncateTranscript } from "../core/transcript";
 import type { AppEnv, SseEvent } from "../core/types";
 import { ClientDisconnected } from "../core/types";
-import { GeminiError, geminiConfigured, streamGenerate } from "../adapters/gemini";
+import { llmConfigured, llmErrorMessage, streamGenerate } from "../adapters/llm";
 import { fetchTranscript, YoutubeError } from "../adapters/youtube";
 import { saveSession } from "../adapters/store";
-import { DEMO_ARTICLE, DEMO_TRANSCRIPT, DEMO_VIDEO_ID } from "../demo-transcript";
+import { getDemoEntry } from "../demo-transcript";
 import type { Transcript } from "../core/types";
 import { jsonResponse, sseEncode, sseFromEvents, sseHeaders } from "./http";
 
 /**
  * POST /api/generate  { url, request? } → SSE 流
  *
- * 双跳管线：Gemini SSE → 解析 text delta → 重新编码为自有事件协议转发前端。
+ * 双跳管线：上游 LLM SSE → 解析 text delta → 重新编码为自有事件协议转发前端。
  * 控制流：参数校验后立即返回 SSE 响应，字幕抓取与生成都发生在后台泵里——
  * 这样 stage 进度事件从字幕抓取的第一层就能推到浏览器（而非等抓取完成才建立连接）。
- * 演示模式（未配置 GEMINI_API_KEY）：假流逐字下发预生成文章，前端可独立验收。
+ * 演示模式（未配置 Gemini/DeepSeek Key）：假流逐字下发预生成文章，前端可独立验收。
+ * LLM 路由：Gemini 优先 → 鉴权失败回退 DeepSeek → 都无则演示。
  */
 export async function handleGenerate(request: Request, env: AppEnv): Promise<Response> {
   let body: { url?: string; request?: string };
@@ -37,17 +38,18 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
   // 字幕降级链 → 流式生成 → 会话保存 → 后续 summarize 全部由它串联
   const sessionId = crypto.randomUUID();
 
-  const demoMode = !geminiConfigured(env);
+  const demoMode = !llmConfigured(env);
 
-  // 演示模式只支持演示视频（假流文章只对应 DEMO_TRANSCRIPT，
-  // 对其他视频播放同一篇文章会是张冠李戴——明确报错而非静默替换）
-  if (demoMode && videoId !== DEMO_VIDEO_ID) {
+  const demoEntry = getDemoEntry(videoId);
+
+  // 演示模式仅支持内置演示视频；无预生成文章的条目在生成阶段再报错
+  if (demoMode && !demoEntry) {
     logger.warn("generate 演示模式下请求了非演示视频", { sessionId, videoId });
     return sseFromEvents([
       {
         type: "error",
         message:
-          "当前为演示模式（未配置 GEMINI_API_KEY），仅支持内置演示视频；配置 Key 后即可生成任意视频，或点击「载入演示视频」体验完整流程",
+          "当前为演示模式（未配置 GEMINI_API_KEY / DEEPSEEK_API_KEY），仅支持内置演示视频；配置 Key 后即可生成任意视频，或点击「载入演示视频」体验完整流程",
       },
     ]);
   }
@@ -72,7 +74,7 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
     logger.info("generate 开始", {
       requestId,
       sessionId,
-      videoId: demoMode ? DEMO_VIDEO_ID : videoId,
+      videoId: demoMode ? (demoEntry?.videoId ?? videoId) : videoId,
       demoMode,
       userRequestChars: userRequest.length,
     });
@@ -81,12 +83,12 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
       let transcript: Transcript;
       if (demoMode) {
         await write({ type: "stage", step: "transcript", status: "active", detail: "演示模式：使用内置字幕" });
-        transcript = DEMO_TRANSCRIPT;
+        transcript = demoEntry!.transcript;
         await write({
           type: "stage",
           step: "transcript",
           status: "done",
-          detail: `${DEMO_TRANSCRIPT.text.length.toLocaleString()} 字`,
+          detail: `${demoEntry!.transcript.text.length.toLocaleString()} 字`,
         });
       } else {
         try {
@@ -117,25 +119,40 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
       await write({
         type: "session",
         id: sessionId,
-        videoTitle: demoMode ? DEMO_TRANSCRIPT.title : transcript.title,
+        videoTitle: demoMode ? demoEntry!.title : transcript.title,
         transcriptSource: demoMode ? "demo" : transcript.source,
         demoMode,
       });
 
       // ── 第二步：流式生成（stage 先行，首字后由前端统计字数/章节）──
-      await write({ type: "stage", step: "generate", status: "active", detail: "Gemini 正在组织语言…" });
+      await write({ type: "stage", step: "generate", status: "active", detail: "正在组织语言…" });
       let finishReason = "STOP";
       if (demoMode) {
-        await write({ type: "info", message: "未配置 GEMINI_API_KEY——演示模式：播放预生成文章（章节 5W1H 仅有内置示例）" });
-        for (const piece of chunkText(DEMO_ARTICLE, 6)) {
+        const demoArticle = demoEntry!.article;
+        if (!demoArticle) {
+          await write({
+            type: "error",
+            message:
+              "此演示视频暂无预生成文章；请配置 GEMINI_API_KEY 或 DEEPSEEK_API_KEY 后重新生成（字幕已可用）",
+          });
+          return;
+        }
+        await write({
+          type: "info",
+          message: "未配置大模型 Key——演示模式：播放预生成文章（章节 5W1H 仅有内置示例）",
+        });
+        for (const piece of chunkText(demoArticle, 6)) {
           await write({ type: "delta", text: piece });
           await sleep(24);
         }
-        article = DEMO_ARTICLE;
+        article = demoArticle;
         finishReason = "DEMO";
       } else {
         if (transcript.source === "demo") {
-          await write({ type: "info", message: "字幕抓取未成功（YouTube 风控），已回退演示视频字幕——生成内容与输入视频可能不符" });
+          await write({
+            type: "info",
+            message: "字幕抓取未成功（YouTube 风控），已回退演示视频字幕——生成内容与输入视频可能不符",
+          });
         }
         const transcriptText = truncateTranscript(transcript.text);
         const { system, user } = buildArticlePrompt({
@@ -144,7 +161,15 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
           userRequest,
         });
 
+        let announcedProvider = false;
         for await (const chunk of streamGenerate(env, system, user, ac.signal)) {
+          if (!announcedProvider && chunk.provider) {
+            announcedProvider = true;
+            await write({
+              type: "info",
+              message: chunk.provider === "deepseek" ? "当前使用 DeepSeek 生成" : "当前使用 Gemini 生成",
+            });
+          }
           if (chunk.text) {
             article += chunk.text;
             await write({ type: "delta", text: chunk.text });
@@ -155,10 +180,10 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
 
       // 先落会话再发 done：保证 done 到达时 5W1H 已可读
       await saveSession(env, sessionId, {
-        videoId: demoMode ? DEMO_TRANSCRIPT.videoId : videoId,
-        videoTitle: demoMode ? DEMO_TRANSCRIPT.title : transcript.title,
+        videoId: demoMode ? demoEntry!.videoId : videoId,
+        videoTitle: demoMode ? demoEntry!.title : transcript.title,
         userRequest,
-        transcriptText: truncateTranscript(demoMode ? DEMO_TRANSCRIPT.text : transcript.text),
+        transcriptText: truncateTranscript(demoMode ? demoEntry!.transcript.text : transcript.text),
         article,
         createdAt: Date.now(),
         demo: demoMode,
@@ -173,29 +198,29 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
       logger.info("generate 完成", {
         requestId,
         sessionId,
-        videoId: demoMode ? DEMO_VIDEO_ID : videoId,
+        videoId: demoMode ? (demoEntry?.videoId ?? videoId) : videoId,
         finishReason,
         articleChars: article.length,
         elapsedMs: Date.now() - startedAt,
       });
     } catch (e) {
-      ac.abort(); // 释放上游 Gemini 流，不浪费配额
+      ac.abort(); // 释放上游 LLM 流，不浪费配额
       if (e instanceof ClientDisconnected) {
         // 用户停止或网络中断：非故障，warn 级别（article 长度可判断中断位置）
         logger.warn("generate 客户端断开", {
           requestId,
           sessionId,
-          videoId: demoMode ? DEMO_VIDEO_ID : videoId,
+          videoId: demoMode ? (demoEntry?.videoId ?? videoId) : videoId,
           articleChars: article.length,
           elapsedMs: Date.now() - startedAt,
         });
         return;
       }
-      const message = e instanceof GeminiError ? e.message : "生成中断，请重试";
+      const message = llmErrorMessage(e);
       logger.error("generate 流式生成中断", {
         requestId,
         sessionId,
-        videoId: demoMode ? DEMO_VIDEO_ID : videoId,
+        videoId: demoMode ? (demoEntry?.videoId ?? videoId) : videoId,
         error: e instanceof Error ? e.message : String(e),
       });
       try {

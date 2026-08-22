@@ -52,7 +52,7 @@ export interface SessionContext {
   transcriptText: string;
   article: string;
   createdAt: number;
-  /** 演示模式（无 GEMINI_API_KEY）生成的会话 */
+  /** 演示模式（无 Gemini/DeepSeek Key）生成的会话 */
   demo: boolean;
 }
 
@@ -90,10 +90,14 @@ export class ClientDisconnected extends Error {
 
 /** Worker 环境绑定（[vars] + secrets，全部可选——未配置时逐项降级） */
 export interface AppEnv {
-  /** Gemini AI Studio API Key；未配置 → 演示模式（假流） */
+  /** Gemini AI Studio API Key；与 DeepSeek 都未配置 → 演示模式（假流） */
   GEMINI_API_KEY?: string;
   /** 默认 gemini-2.5-flash（flash 系列自动关闭 thinking 保证首字延迟） */
   GEMINI_MODEL?: string;
+  /** DeepSeek API Key；Gemini 未配或鉴权失败时回退 */
+  DEEPSEEK_API_KEY?: string;
+  /** 默认 deepseek-v4-flash */
+  DEEPSEEK_MODEL?: string;
   /** webshare.io 代理四元组；未配置 → 跳过代理层 */
   PROXY_HOST?: string;
   PROXY_PORT?: string;
