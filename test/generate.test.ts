@@ -88,6 +88,24 @@ describe("handleGenerate", () => {
     expect(fetchTranscript).toHaveBeenCalled();
   });
 
+  it("演示视频配 LLM 时不请求 YouTube、不提示风控", async () => {
+    const res = await handleGenerate(
+      genRequest(`https://www.youtube.com/watch?v=${DEMO_VIDEO_ID}`),
+      { DEEPSEEK_API_KEY: "d" },
+    );
+    const events = await readUntil(
+      res,
+      (ev) => ev.type === "stage" && ev.step === "generate" && ev.status === "active",
+    );
+    expect(fetchTranscript).not.toHaveBeenCalled();
+    expect(events.some((e) => e.type === "info" && e.message.includes("风控"))).toBe(false);
+    expect(
+      events.some(
+        (e) => e.type === "stage" && e.step === "transcript" && e.detail?.includes("内置字幕"),
+      ),
+    ).toBe(true);
+  });
+
   it("演示模式先发 transcript stage，再 session，再 generate stage", async () => {
     const res = await handleGenerate(
       genRequest(`https://www.youtube.com/watch?v=${DEMO_VIDEO_ID}`),

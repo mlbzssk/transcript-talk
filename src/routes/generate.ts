@@ -90,6 +90,16 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
           status: "done",
           detail: `${demoEntry!.transcript.text.length.toLocaleString()} 字`,
         });
+      } else if (demoEntry) {
+        // 内置演示视频：直接用硬编码字幕，跳过 YouTube（避免误报风控）
+        await write({ type: "stage", step: "transcript", status: "active", detail: "演示视频：使用内置字幕" });
+        transcript = demoEntry.transcript;
+        await write({
+          type: "stage",
+          step: "transcript",
+          status: "done",
+          detail: `${demoEntry.transcript.text.length.toLocaleString()} 字`,
+        });
       } else {
         try {
           transcript = await fetchTranscript(env, videoId, sessionId, (u) =>
@@ -148,15 +158,10 @@ export async function handleGenerate(request: Request, env: AppEnv): Promise<Res
         article = demoArticle;
         finishReason = "DEMO";
       } else {
-        if (transcript.source === "demo") {
-          await write({
-            type: "info",
-            message: "字幕抓取未成功（YouTube 风控），已回退演示视频字幕——生成内容与输入视频可能不符",
-          });
-        }
         const transcriptText = truncateTranscript(transcript.text);
         const { system, user } = buildArticlePrompt({
           videoTitle: transcript.title,
+          author: transcript.author,
           transcript: transcriptText,
           userRequest,
         });

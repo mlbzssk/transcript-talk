@@ -661,7 +661,7 @@ els.stop.addEventListener("click", () => state.abort && state.abort.abort());
 function loadDemo(url, label) {
   els.url.value = url;
   els.url.focus();
-  showStatus("已载入「" + label + "」。点击「生成文章」开始。若 YouTube 风控导致字幕抓取失败，将自动回退内置演示字幕。", "info");
+  showStatus("已载入「" + label + "」。点击「生成文章」开始。", "info");
 }
 els.demoA16z.addEventListener("click", () =>
   loadDemo("https://www.youtube.com/watch?v=xRh2sVcNXQ8", "a16z: Marc Andreessen's 2026 Outlook"));
